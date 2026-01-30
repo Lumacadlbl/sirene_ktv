@@ -9,6 +9,20 @@ if (!isset($_SESSION['user_id'])) {
 
 $user_id = $_SESSION['user_id'];
 
+// Fetch user's bookings with payment status
+$bookings_query = $conn->prepare("
+    SELECT b.*, r.room_name, r.capcity, r.price_hr,
+           p.payment_status as pay_status
+    FROM booking b 
+    JOIN room r ON b.r_id = r.r_id 
+    LEFT JOIN payments p ON b.b_id = p.b_id
+    WHERE b.u_id = ? 
+    ORDER BY b.booking_date DESC, b.start_time DESC
+");
+
+if (!$bookings_query) {
+    die("Prepare failed: " . $conn->error);
+}
 
 $bookings_query->bind_param("i", $user_id);
 $bookings_query->execute();
@@ -376,7 +390,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                 <?php
                 $upcoming = array_filter($bookings, function($b) {
                     return strtotime($b['booking_date'] . ' ' . $b['end_time']) > time() 
-                           && $b['payment_status'] != 'cancelled';
+                           && ($b['pay_status'] != 'cancelled' || !$b['pay_status']);
                 });
                 ?>
                 <div class="stat-card">
@@ -386,7 +400,12 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                 </div>
                 
                 <?php
-                $total_spent = array_sum(array_column($bookings, 'total_amount'));
+                $total_spent = 0;
+                foreach ($bookings as $booking) {
+                    if ($booking['pay_status'] == 'approved') {
+                        $total_spent += $booking['total_amount'];
+                    }
+                }
                 ?>
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
@@ -395,23 +414,42 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                 </div>
                 
                 <div class="stat-card">
-                    <div class="stat-icon"><i class="fas fa-utensils"></i></div>
-                    <div class="stat-number"><?php echo array_sum(array_column($bookings, 'food_count')); ?></div>
-                    <div class="stat-label">Food Items</div>
+                    <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
+                    <div class="stat-number">
+                        <?php 
+                        $approved = array_filter($bookings, function($b) {
+                            return $b['pay_status'] == 'approved';
+                        });
+                        echo count($approved);
+                        ?>
+                    </div>
+                    <div class="stat-label">Paid</div>
                 </div>
             </div>
             
             <div class="bookings-list">
                 <?php foreach ($bookings as $booking): 
+                    // Determine status based on payment
+                    $status = $booking['pay_status'] ?? 'pending';
                     $status_class = 'status-pending';
-                    if ($booking['payment_status'] == 'paid') $status_class = 'status-confirmed';
-                    if ($booking['payment_status'] == 'cancelled') $status_class = 'status-cancelled';
+                    $status_text = 'Pending';
+                    
+                    if ($status == 'approved') {
+                        $status_class = 'status-confirmed';
+                        $status_text = 'Confirmed';
+                    } elseif ($status == 'cancelled') {
+                        $status_class = 'status-cancelled';
+                        $status_text = 'Cancelled';
+                    } elseif ($status == 'failed') {
+                        $status_class = 'status-pending';
+                        $status_text = 'Failed';
+                    }
                 ?>
                     <div class="booking-card">
                         <div class="booking-header">
                             <div class="booking-id">Booking #<?php echo str_pad($booking['b_id'], 6, '0', STR_PAD_LEFT); ?></div>
                             <div class="booking-status <?php echo $status_class; ?>">
-                                <?php echo ucfirst($booking['payment_status']); ?>
+                                <?php echo $status_text; ?>
                             </div>
                         </div>
                         
@@ -452,35 +490,27 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                             </div>
                         </div>
                         
-                        <?php if ($booking['food_count'] > 0): ?>
-                            <div class="detail-item">
-                                <div class="detail-icon"><i class="fas fa-utensils"></i></div>
-                                <div class="detail-content">
-                                    <h4>Food & Drinks</h4>
-                                    <p><?php echo $booking['food_count']; ?> items included</p>
-                                </div>
-                            </div>
-                        <?php endif; ?>
-                        
                         <div class="booking-amount">
                             <div class="amount-label">Total Amount</div>
                             <div class="amount-value">₹<?php echo number_format($booking['total_amount'], 2); ?></div>
                         </div>
                         
                         <div class="booking-actions">
-                            <button class="action-btn action-primary" onclick="viewBooking(<?php echo $booking['b_id']; ?>)">
+                            <?php if ($status == 'pending' || $status == 'failed'): ?>
+                                <button class="action-btn action-primary" onclick="makePayment(<?php echo $booking['b_id']; ?>)">
+                                    <i class="fas fa-credit-card"></i> Pay Now
+                                </button>
+                            <?php endif; ?>
+                            
+                            <button class="action-btn action-secondary" onclick="viewBooking(<?php echo $booking['b_id']; ?>)">
                                 <i class="fas fa-eye"></i> View Details
                             </button>
                             
-                            <?php if ($booking['payment_status'] == 'pending'): ?>
+                            <?php if ($status == 'pending'): ?>
                                 <button class="action-btn action-secondary" onclick="cancelBooking(<?php echo $booking['b_id']; ?>)">
                                     <i class="fas fa-times"></i> Cancel
                                 </button>
                             <?php endif; ?>
-                            
-                            <button class="action-btn action-secondary" onclick="printBooking(<?php echo $booking['b_id']; ?>)">
-                                <i class="fas fa-print"></i> Print
-                            </button>
                         </div>
                     </div>
                 <?php endforeach; ?>
@@ -502,9 +532,12 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             window.location.href = 'booking-details.php?id=' + bookingId;
         }
         
+        function makePayment(bookingId) {
+            window.location.href = 'payment.php?id=' + bookingId;
+        }
+        
         function cancelBooking(bookingId) {
             if (confirm('Are you sure you want to cancel this booking?')) {
-                // In a real app, this would make an AJAX call
                 window.location.href = 'cancel-booking.php?id=' + bookingId;
             }
         }

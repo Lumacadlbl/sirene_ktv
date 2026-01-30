@@ -147,6 +147,29 @@ if ($foods_count > 0) {
             transform: translateY(-1px);
         }
 
+        .my-bookings-btn {
+            background: linear-gradient(135deg, var(--info), #0984e3);
+            color: white;
+            border: none;
+            padding: 9px 22px;
+            border-radius: 22px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 13px;
+            text-decoration: none;
+        }
+
+        .my-bookings-btn:hover {
+            background: linear-gradient(135deg, #0984e3, var(--info));
+            transform: translateY(-1px);
+            text-decoration: none;
+            color: white;
+        }
+
         .welcome-section {
             padding: 28px;
             text-align: center;
@@ -600,6 +623,12 @@ if ($foods_count > 0) {
             .header-right {
                 flex-direction: column;
                 gap: 12px;
+                width: 100%;
+            }
+            
+            .user-info, .my-bookings-btn, .logout-btn {
+                width: 100%;
+                justify-content: center;
             }
             
             .welcome-section {
@@ -664,6 +693,12 @@ if ($foods_count > 0) {
             <i class="fas fa-user-circle"></i>
             <?php echo htmlspecialchars($name); ?> (<?php echo ucfirst($role); ?>)
         </div>
+        
+        <!-- My Bookings Button -->
+        <a href="my-bookings.php" class="my-bookings-btn">
+            <i class="fas fa-calendar-check"></i> My Bookings
+        </a>
+        
         <form action="logout.php" method="post">
             <button type="submit" class="logout-btn">
                 <i class="fas fa-sign-out-alt"></i> Logout
@@ -876,6 +911,11 @@ if ($foods_count > 0) {
                 <li class="action-item" onclick="switchTab('foods')">
                     <div class="action-icon"><i class="fas fa-utensils"></i></div>
                     <div class="action-text">View Food Menu</div>
+                    <i class="fas fa-chevron-right"></i>
+                </li>
+                <li class="action-item" onclick="window.location.href='my-bookings.php'">
+                    <div class="action-icon"><i class="fas fa-calendar-check"></i></div>
+                    <div class="action-text">My Bookings</div>
                     <i class="fas fa-chevron-right"></i>
                 </li>
                 <li class="action-item" onclick="viewProfile()">

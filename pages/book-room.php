@@ -102,7 +102,7 @@ $stmt->bind_param(
             // Insert booking food items if any
             if (!empty($food_details)) {
                 foreach ($food_details as $food) {
-                    $food_stmt = $conn->prepare("INSERT INTO booking_food (booking_id, food_id, quantity, price_at_booking) VALUES (?, ?, ?, ?)");
+                    $food_stmt = $conn->prepare("INSERT INTO booking_food (b_id, f_id, quantity, price) VALUES (?, ?, ?, ?)");
                     $food_stmt->bind_param("iiid", $booking_id, $food['id'], $food['qty'], $food['price']);
                     $food_stmt->execute();
                 }

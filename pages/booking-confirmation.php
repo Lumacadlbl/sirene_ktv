@@ -329,7 +329,6 @@ if (!$booking) {
         <div class="payment-info">
             <h3><i class="fas fa-info-circle"></i> Important Information</h3>
             <p>
-                • Please arrive 15 minutes before your booking time<br>
                 • Present your booking ID at the reception<br>
                 • Payment will be collected at the venue<br>
                 • Cancellation must be made 24 hours in advance<br>

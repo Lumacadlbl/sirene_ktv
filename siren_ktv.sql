@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Jan 30, 2026 at 03:57 AM
+-- Generation Time: Jan 30, 2026 at 12:00 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -50,7 +50,30 @@ CREATE TABLE `booking` (
 --
 
 INSERT INTO `booking` (`b_id`, `u_id`, `r_id`, `booking_date`, `start_time`, `end_time`, `hours`, `room_amount`, `food_amount`, `subtotal`, `tax_amount`, `total_amount`, `status`, `payment_status`, `created_at`) VALUES
-(0, 2, 1, '2026-01-30 00:00:00', '18:00:00', '20:00:00', 2, 200, 0, 200, 20, 220, 'Approved', 'pending', 2147483647);
+(1, 2, 1, '2026-01-30 00:00:00', '18:00:00', '20:00:00', 2, 200, 0, 200, 20, 220, 'Cancelled', 'pending', 2147483647),
+(2, 2, 2, '2026-01-31 00:00:00', '18:00:00', '20:00:00', 2, 350, 0, 350, 35, 385, 'Cancelled', 'pending', 2147483647),
+(6, 2, 3, '2026-01-31 00:00:00', '18:00:00', '23:00:00', 5, 1125, 40, 1165, 117, 1282, 'Approved', 'paid', 2147483647);
+
+-- --------------------------------------------------------
+
+--
+-- Table structure for table `booking_food`
+--
+
+CREATE TABLE `booking_food` (
+  `bf_id` int(11) NOT NULL,
+  `b_id` int(11) NOT NULL,
+  `f_id` int(11) NOT NULL,
+  `quantity` int(11) NOT NULL,
+  `price` int(11) NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `booking_food`
+--
+
+INSERT INTO `booking_food` (`bf_id`, `b_id`, `f_id`, `quantity`, `price`) VALUES
+(2, 6, 1, 4, 10);
 
 -- --------------------------------------------------------
 
@@ -103,6 +126,13 @@ CREATE TABLE `payments` (
   `payment_date` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+--
+-- Dumping data for table `payments`
+--
+
+INSERT INTO `payments` (`p_id`, `b_id`, `u_id`, `payment_method`, `payment_status`, `amount`, `payment_date`) VALUES
+(1, 6, 2, 'card', 'approved', 1282.00, '2026-01-30 10:47:48');
+
 -- --------------------------------------------------------
 
 --
@@ -124,7 +154,8 @@ CREATE TABLE `room` (
 
 INSERT INTO `room` (`r_id`, `room_name`, `capcity`, `price_hr`, `status`, `created_at`) VALUES
 (1, 'VIP', 5, 100, 'Booked', '2026-01-29 13:18:39'),
-(2, 'Room 1', 7, 175, 'Available', '2026-01-30 02:50:39');
+(2, 'Room 1', 7, 175, 'Available', '2026-01-30 09:48:02'),
+(3, 'Room 2', 10, 225, 'Booked', '2026-01-30 10:02:39');
 
 -- --------------------------------------------------------
 
@@ -158,8 +189,17 @@ INSERT INTO `user_tbl` (`id`, `name`, `email`, `password`, `contact`, `age`, `ro
 -- Indexes for table `booking`
 --
 ALTER TABLE `booking`
+  ADD PRIMARY KEY (`b_id`),
   ADD KEY `u_id` (`u_id`),
   ADD KEY `r_id` (`r_id`);
+
+--
+-- Indexes for table `booking_food`
+--
+ALTER TABLE `booking_food`
+  ADD PRIMARY KEY (`bf_id`),
+  ADD KEY `booking_food_ibfk_1` (`f_id`),
+  ADD KEY `booking_food_ibfk_2` (`b_id`);
 
 --
 -- Indexes for table `extra_expense`
@@ -177,7 +217,9 @@ ALTER TABLE `food_beverages`
 -- Indexes for table `payments`
 --
 ALTER TABLE `payments`
-  ADD PRIMARY KEY (`p_id`);
+  ADD PRIMARY KEY (`p_id`),
+  ADD KEY `u_id` (`u_id`),
+  ADD KEY `payments_ibfk_2` (`b_id`);
 
 --
 -- Indexes for table `room`
@@ -196,6 +238,18 @@ ALTER TABLE `user_tbl`
 --
 
 --
+-- AUTO_INCREMENT for table `booking`
+--
+ALTER TABLE `booking`
+  MODIFY `b_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+
+--
+-- AUTO_INCREMENT for table `booking_food`
+--
+ALTER TABLE `booking_food`
+  MODIFY `bf_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+
+--
 -- AUTO_INCREMENT for table `extra_expense`
 --
 ALTER TABLE `extra_expense`
@@ -211,13 +265,13 @@ ALTER TABLE `food_beverages`
 -- AUTO_INCREMENT for table `payments`
 --
 ALTER TABLE `payments`
-  MODIFY `p_id` int(11) NOT NULL AUTO_INCREMENT;
+  MODIFY `p_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 
 --
 -- AUTO_INCREMENT for table `room`
 --
 ALTER TABLE `room`
-  MODIFY `r_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `r_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
 -- AUTO_INCREMENT for table `user_tbl`
@@ -235,6 +289,20 @@ ALTER TABLE `user_tbl`
 ALTER TABLE `booking`
   ADD CONSTRAINT `booking_ibfk_1` FOREIGN KEY (`u_id`) REFERENCES `user_tbl` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
   ADD CONSTRAINT `booking_ibfk_2` FOREIGN KEY (`r_id`) REFERENCES `room` (`r_id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+--
+-- Constraints for table `booking_food`
+--
+ALTER TABLE `booking_food`
+  ADD CONSTRAINT `booking_food_ibfk_1` FOREIGN KEY (`f_id`) REFERENCES `food_beverages` (`f_id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  ADD CONSTRAINT `booking_food_ibfk_2` FOREIGN KEY (`b_id`) REFERENCES `booking` (`b_id`) ON DELETE CASCADE ON UPDATE CASCADE;
+
+--
+-- Constraints for table `payments`
+--
+ALTER TABLE `payments`
+  ADD CONSTRAINT `payments_ibfk_1` FOREIGN KEY (`u_id`) REFERENCES `user_tbl` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  ADD CONSTRAINT `payments_ibfk_2` FOREIGN KEY (`b_id`) REFERENCES `booking` (`b_id`);
 COMMIT;
 
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
