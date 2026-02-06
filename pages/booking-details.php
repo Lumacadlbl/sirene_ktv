@@ -23,7 +23,7 @@ if ($booking_id == 0) {
     exit;
 }
 
-// Fetch booking details WITH PAYMENT STATUS
+// Fetch booking details WITH PAYMENT STATUS - DO THIS FIRST!
 $booking_query = $conn->prepare("
     SELECT b.*, r.room_name, r.price_hr, r.capcity,
            u.name as customer_name, u.email as customer_email, u.contact as customer_phone,
@@ -74,9 +74,34 @@ try {
     $total_hours = 1;
 }
 
-// Calculate costs
+// Calculate room cost
 $room_cost = $total_hours * ($booking['price_hr'] ?? 0);
-$food_cost = $booking['food_total'] ?? 0;
+
+// Fetch food items for this booking - FIXED VERSION
+$food_items = [];
+$food_cost = 0; // Initialize food cost
+
+// Query booking_food table instead
+$food_query = $conn->prepare("
+    SELECT bf.*, fb.item_name, fb.category, fb.price 
+    FROM booking_food bf
+    LEFT JOIN food_beverages fb ON bf.f_id = fb.f_id
+    WHERE bf.b_id = ?
+");
+$food_query->bind_param("i", $booking_id);
+$food_query->execute();
+$food_result = $food_query->get_result();
+
+if ($food_result && $food_result->num_rows > 0) {
+    while ($food = $food_result->fetch_assoc()) {
+        // Calculate subtotal for each item
+        $food['subtotal'] = ($food['price'] ?? 0) * ($food['quantity'] ?? 1);
+        $food_cost += $food['subtotal']; // Add to total food cost
+        $food_items[] = $food;
+    }
+}
+
+// Now calculate total cost with the correct food cost
 $total_cost = $room_cost + $food_cost;
 $deposit_amount = $booking['deposit_amount'] ?? 0;
 $balance_due = $total_cost - $deposit_amount;
@@ -132,29 +157,6 @@ elseif ($deposit_amount >= $grand_total) {
 elseif ($deposit_amount > 0) {
     $payment_status = 'Partial';
     $payment_status_class = 'partial';
-}
-
-// Fetch food items for this booking
-$food_items = [];
-if (isset($booking['food_items']) && !empty($booking['food_items'])) {
-    $food_ids = explode(',', $booking['food_items']);
-    $food_quantities = isset($booking['food_quantities']) ? explode(',', $booking['food_quantities']) : [];
-    
-    if (!empty($food_ids)) {
-        $food_ids = array_map('intval', $food_ids);
-        $food_ids_str = implode(',', $food_ids);
-        $food_query = $conn->query("SELECT * FROM food_beverages WHERE f_id IN ($food_ids_str)");
-        if ($food_query) {
-            while ($food = $food_query->fetch_assoc()) {
-                $key = array_search($food['f_id'], $food_ids);
-                $quantity = ($key !== false && isset($food_quantities[$key])) ? 
-                            intval($food_quantities[$key]) : 1;
-                $food['quantity'] = $quantity;
-                $food['subtotal'] = ($food['price'] ?? 0) * $quantity;
-                $food_items[] = $food;
-            }
-        }
-    }
 }
 
 // Status colors
@@ -326,62 +328,6 @@ try {
             color: white;
         }
 
-        /* NEW: Header action buttons */
-        .header-actions {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-
-        .header-action-btn {
-            padding: 8px 20px;
-            border-radius: 10px;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-            border: none;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            text-decoration: none;
-            text-align: center;
-            min-width: 140px;
-        }
-
-        .header-action-btn.receipt {
-            background: linear-gradient(135deg, var(--success), #00b894);
-            color: white;
-        }
-
-        .header-action-btn.receipt:hover {
-            background: linear-gradient(135deg, #00b894, var(--success));
-            transform: translateY(-1px);
-            box-shadow: 0 5px 15px rgba(0, 184, 148, 0.3);
-        }
-
-        .header-action-btn.payment {
-            background: linear-gradient(135deg, var(--info), #0984e3);
-            color: white;
-        }
-
-        .header-action-btn.payment:hover {
-            background: linear-gradient(135deg, #0984e3, var(--info));
-            transform: translateY(-1px);
-            box-shadow: 0 5px 15px rgba(9, 132, 227, 0.3);
-        }
-
-        .header-action-btn.cancel {
-            background: linear-gradient(135deg, var(--danger), #d63031);
-            color: white;
-        }
-
-        .header-action-btn.cancel:hover {
-            background: linear-gradient(135deg, #d63031, var(--danger));
-            transform: translateY(-1px);
-            box-shadow: 0 5px 15px rgba(214, 48, 49, 0.3);
-        }
-
         .container {
             max-width: 1200px;
             margin: 30px auto;
@@ -392,7 +338,7 @@ try {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
             background: rgba(255, 255, 255, 0.05);
             padding: 25px;
             border-radius: 15px;
@@ -426,6 +372,92 @@ try {
             margin-left: 15px;
             text-transform: uppercase;
             letter-spacing: 1px;
+        }
+
+        /* Booking Action Buttons */
+        .action-buttons-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .action-buttons-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        @media (max-width: 768px) {
+            .action-buttons-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .action-btn {
+            padding: 15px 20px;
+            border-radius: 10px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            text-decoration: none;
+            text-align: center;
+            min-height: 50px;
+        }
+
+        .action-btn.receipt {
+            background: linear-gradient(135deg, var(--success), #00b894);
+            color: white;
+            border: 1px solid rgba(0, 184, 148, 0.3);
+        }
+
+        .action-btn.receipt:hover {
+            background: linear-gradient(135deg, #00b894, var(--success));
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(0, 184, 148, 0.3);
+        }
+
+        .action-btn.payment {
+            background: linear-gradient(135deg, var(--info), #0984e3);
+            color: white;
+            border: 1px solid rgba(9, 132, 227, 0.3);
+        }
+
+        .action-btn.payment:hover {
+            background: linear-gradient(135deg, #0984e3, var(--info));
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(9, 132, 227, 0.3);
+        }
+
+        .action-btn.cancel {
+            background: linear-gradient(135deg, var(--danger), #d63031);
+            color: white;
+            border: 1px solid rgba(214, 48, 49, 0.3);
+        }
+
+        .action-btn.cancel:hover {
+            background: linear-gradient(135deg, #d63031, var(--danger));
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(214, 48, 49, 0.3);
+        }
+
+        .action-btn.edit {
+            background: linear-gradient(135deg, var(--warning), #fdcb6e);
+            color: #333;
+            border: 1px solid rgba(253, 203, 110, 0.3);
+        }
+
+        .action-btn.edit:hover {
+            background: linear-gradient(135deg, #fdcb6e, var(--warning));
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(253, 203, 110, 0.3);
         }
 
         .main-content {
@@ -637,61 +669,6 @@ try {
             border: 1px solid rgba(214, 48, 49, 0.3);
         }
 
-        .actions-section {
-            display: flex;
-            gap: 15px;
-            margin-top: 25px;
-            padding-top: 25px;
-            border-top: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .action-btn {
-            padding: 12px 25px;
-            border-radius: 10px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-            border: none;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            min-width: 150px;
-            text-decoration: none;
-            text-align: center;
-        }
-
-        .action-btn.cancel {
-            background: linear-gradient(135deg, var(--danger), #d63031);
-            color: white;
-        }
-
-        .action-btn.cancel:hover {
-            background: linear-gradient(135deg, #d63031, var(--danger));
-            transform: translateY(-2px);
-        }
-
-        .action-btn.receipt {
-            background: linear-gradient(135deg, var(--success), #00b894);
-            color: white;
-        }
-
-        .action-btn.receipt:hover {
-            background: linear-gradient(135deg, #00b894, var(--success));
-            transform: translateY(-2px);
-        }
-
-        .action-btn.payment {
-            background: linear-gradient(135deg, var(--info), #0984e3);
-            color: white;
-        }
-
-        .action-btn.payment:hover {
-            background: linear-gradient(135deg, #0984e3, var(--info));
-            transform: translateY(-2px);
-        }
-
         .timeline {
             position: relative;
             padding-left: 30px;
@@ -789,15 +766,6 @@ try {
                 flex-direction: column;
                 width: 100%;
             }
-            
-            .header-actions {
-                flex-direction: column;
-                width: 100%;
-            }
-            
-            .header-action-btn {
-                width: 100%;
-            }
         }
 
         @media (max-width: 768px) {
@@ -831,14 +799,6 @@ try {
             .booking-badge {
                 margin-left: 0;
                 margin-top: 10px;
-            }
-            
-            .actions-section {
-                flex-direction: column;
-            }
-            
-            .action-btn {
-                width: 100%;
             }
         }
 
@@ -881,27 +841,8 @@ try {
             <?php echo htmlspecialchars($name); ?> (<?php echo ucfirst($role); ?>)
         </div>
         
-        <div class="header-actions">
-            <!-- VIEW RECEIPT BUTTON IN HEADER -->
-            <a href="receipt.php?id=<?php echo $booking_id; ?>" class="header-action-btn receipt">
-                <i class="fas fa-file-invoice"></i> View Receipt
-            </a>
-            
-            <?php if ($payment_status !== 'Paid' && $balance_due_with_tax > 0): ?>
-            <a href="payment.php?id=<?php echo $booking_id; ?>" class="header-action-btn payment">
-                <i class="fas fa-credit-card"></i> Make Payment
-            </a>
-            <?php endif; ?>
-            
-            <?php if ($booking['status'] == 'pending' || $booking['status'] == 'confirmed'): ?>
-            <button class="header-action-btn cancel" onclick="cancelBooking()">
-                <i class="fas fa-times-circle"></i> Cancel
-            </button>
-            <?php endif; ?>
-        </div>
-        
         <a href="my-bookings.php" class="back-btn">
-            <i class="fas fa-arrow-left"></i> Back to Bookings
+            <i class="fas fa-arrow-left"></i> Back to My Bookings
         </a>
         
         <form action="logout.php" method="post">
@@ -928,6 +869,33 @@ try {
             <span class="payment-status <?php echo $payment_status_class; ?>">
                 <?php echo $payment_status; ?> Payment
             </span>
+        </div>
+    </div>
+
+    <!-- Booking Action Buttons -->
+    <div class="action-buttons-section">
+        <div class="action-buttons-grid">
+            <a href="receipt.php?id=<?php echo $booking_id; ?>" class="action-btn receipt">
+                <i class="fas fa-file-invoice"></i> View Receipt
+            </a>
+            
+            <?php if ($payment_status !== 'Paid' && $balance_due_with_tax > 0): ?>
+            <a href="payment.php?id=<?php echo $booking_id; ?>" class="action-btn payment">
+                <i class="fas fa-credit-card"></i> Make Payment
+            </a>
+            <?php endif; ?>
+            
+            <?php if (($booking['status'] == 'pending' || $booking['status'] == 'confirmed') && $role != 'admin'): ?>
+            <button class="action-btn cancel" onclick="cancelBooking()">
+                <i class="fas fa-times-circle"></i> Cancel Booking
+            </button>
+            <?php endif; ?>
+            
+            <?php if ($role == 'admin'): ?>
+            <a href="admin/edit-booking.php?id=<?php echo $booking_id; ?>" class="action-btn edit">
+                <i class="fas fa-edit"></i> Edit Booking
+            </a>
+            <?php endif; ?>
         </div>
     </div>
 
@@ -1204,8 +1172,6 @@ try {
             </div>
         </div>
     </div>
-
-    <!-- REMOVED the bottom Actions section since buttons are now in header -->
 </div>
 
 <footer>
@@ -1236,6 +1202,18 @@ try {
                 card.style.opacity = '1';
                 card.style.transform = 'translateY(0)';
             }, index * 100);
+        });
+        
+        // Animate action buttons
+        const actionButtons = document.querySelectorAll('.action-btn');
+        actionButtons.forEach((btn, index) => {
+            btn.style.opacity = '0';
+            btn.style.transform = 'translateY(10px)';
+            setTimeout(() => {
+                btn.style.transition = 'opacity 0.5s, transform 0.5s';
+                btn.style.opacity = '1';
+                btn.style.transform = 'translateY(0)';
+            }, 300 + (index * 100));
         });
     });
 </script>

@@ -8,6 +8,8 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user_id = $_SESSION['user_id'];
+$name = $_SESSION['name'] ?? 'User';
+$role = $_SESSION['role'] ?? 'user';
 $booking_id = $_GET['id'] ?? 0;
 
 // Fetch booking details
@@ -24,11 +26,12 @@ $booking_result = $booking_query->get_result();
 $booking = $booking_result->fetch_assoc();
 
 if (!$booking) {
-    die("Booking not found or access denied.");
+    header("Location: my-bookings.php");
+    exit;
 }
 
 // Check if already paid
-if ($booking['payment_status'] == 'paid') {
+if ($booking['payment_status'] == 'paid' || $booking['payment_status'] == 'approved') {
     header("Location: my-bookings.php?message=already_paid");
     exit;
 }
@@ -124,7 +127,7 @@ function validatePayment($method, $data) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payment - Sirene KTV</title>
+    <title>Payment - Booking #<?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?> - Sirene KTV</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         :root {
@@ -132,49 +135,133 @@ function validatePayment($method, $data) {
             --secondary: #16213e;
             --accent: #0f3460;
             --highlight: #e94560;
+            --light: #f5f5f5;
+            --dark: #0d1117;
             --success: #00b894;
             --warning: #fdcb6e;
             --danger: #d63031;
-            --light: #f5f5f5;
+            --info: #0984e3;
+            --purple: #6c5ce7;
             --gcash: #0c7d69;
             --paymaya: #ff6b00;
             --paypal: #003087;
             --bank: #4a6fa5;
         }
-        
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, var(--primary), var(--secondary));
             color: var(--light);
             min-height: 100vh;
         }
-        
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
+
+        header {
+            background: rgba(10, 10, 20, 0.95);
+            padding: 18px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid var(--highlight);
         }
-        
-        .header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        
-        .header h1 {
-            font-size: 36px;
+
+        .header-left h1 {
+            font-size: 26px;
             background: linear-gradient(90deg, var(--highlight), #ff7675);
             -webkit-background-clip: text;
             background-clip: text;
             color: transparent;
-            margin-bottom: 10px;
         }
-        
+
+        .header-left p {
+            color: #aaa;
+            font-size: 13px;
+            margin-top: 3px;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+        }
+
+        .user-info {
+            background: var(--accent);
+            padding: 7px 14px;
+            border-radius: 18px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+
+        .user-info i {
+            color: var(--highlight);
+        }
+
+        .back-btn {
+            background: linear-gradient(135deg, var(--accent), #0f3460);
+            color: white;
+            border: none;
+            padding: 9px 22px;
+            border-radius: 22px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 13px;
+            text-decoration: none;
+        }
+
+        .back-btn:hover {
+            background: linear-gradient(135deg, #0f3460, var(--accent));
+            transform: translateY(-1px);
+            text-decoration: none;
+            color: white;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 25px;
+            border-radius: 15px;
+            border-left: 4px solid var(--highlight);
+        }
+
+        .page-title h2 {
+            font-size: 28px;
+            color: var(--light);
+            margin-bottom: 5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .page-title h2 i {
+            color: var(--highlight);
+        }
+
+        .page-title p {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 14px;
+        }
+
         .demo-notice {
             background: rgba(253, 203, 110, 0.2);
             border: 1px solid rgba(253, 203, 110, 0.3);
@@ -184,33 +271,12 @@ function validatePayment($method, $data) {
             text-align: center;
             color: var(--light);
         }
-        
+
         .demo-notice i {
             color: var(--warning);
             margin-right: 10px;
         }
-        
-        .back-btn {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            background: rgba(255, 255, 255, 0.1);
-            border: none;
-            color: white;
-            padding: 10px 20px;
-            border-radius: 25px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            transition: all 0.2s;
-            text-decoration: none;
-        }
-        
-        .back-btn:hover {
-            background: rgba(255, 255, 255, 0.2);
-        }
-        
+
         .booking-info {
             background: rgba(255, 255, 255, 0.08);
             border-radius: 15px;
@@ -218,28 +284,38 @@ function validatePayment($method, $data) {
             margin-bottom: 20px;
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
-        
-        .info-row {
+
+        .info-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .info-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .info-item {
             display: flex;
-            justify-content: space-between;
-            margin-bottom: 10px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            flex-direction: column;
+            gap: 5px;
         }
-        
-        .info-row:last-child {
-            border-bottom: none;
-        }
-        
+
         .info-label {
+            font-size: 12px;
             color: rgba(255, 255, 255, 0.6);
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
-        
+
         .info-value {
-            font-weight: bold;
+            font-size: 16px;
+            font-weight: 600;
             color: var(--light);
         }
-        
+
         .total-amount {
             background: rgba(233, 69, 96, 0.1);
             padding: 25px;
@@ -248,21 +324,21 @@ function validatePayment($method, $data) {
             margin: 25px 0;
             border: 1px solid rgba(233, 69, 96, 0.2);
         }
-        
+
         .total-label {
             color: rgba(255, 255, 255, 0.6);
             font-size: 14px;
             text-transform: uppercase;
             letter-spacing: 1px;
         }
-        
+
         .total-value {
             color: var(--highlight);
             font-size: 36px;
             font-weight: bold;
             margin-top: 10px;
         }
-        
+
         .payment-section {
             background: rgba(255, 255, 255, 0.08);
             border-radius: 15px;
@@ -270,7 +346,7 @@ function validatePayment($method, $data) {
             margin-bottom: 20px;
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
-        
+
         .section-title {
             color: var(--light);
             font-size: 20px;
@@ -279,30 +355,18 @@ function validatePayment($method, $data) {
             align-items: center;
             gap: 10px;
         }
-        
+
         .section-title i {
             color: var(--highlight);
         }
-        
+
         .payment-methods {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 15px;
             margin-bottom: 25px;
         }
-        
-        @media (max-width: 768px) {
-            .payment-methods {
-                grid-template-columns: repeat(2, 1fr);
-            }
-        }
-        
-        @media (max-width: 480px) {
-            .payment-methods {
-                grid-template-columns: 1fr;
-            }
-        }
-        
+
         .method-option {
             background: rgba(255, 255, 255, 0.05);
             border: 2px solid rgba(255, 255, 255, 0.1);
@@ -314,17 +378,17 @@ function validatePayment($method, $data) {
             position: relative;
             overflow: hidden;
         }
-        
+
         .method-option:hover {
             transform: translateY(-3px);
             box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
         }
-        
+
         .method-option.selected {
             border-color: var(--highlight);
             background: rgba(233, 69, 96, 0.1);
         }
-        
+
         .method-icon {
             font-size: 30px;
             margin-bottom: 10px;
@@ -333,39 +397,39 @@ function validatePayment($method, $data) {
             align-items: center;
             justify-content: center;
         }
-        
+
         .method-name {
             font-weight: bold;
             color: var(--light);
             font-size: 14px;
         }
-        
+
         .method-fee {
             font-size: 12px;
             color: rgba(255, 255, 255, 0.6);
             margin-top: 5px;
         }
-        
+
         /* Method-specific colors */
-        .method-card .method-icon { color: #0984e3; }
-        .method-upi .method-icon { color: #6c5ce7; }
+        .method-card .method-icon { color: var(--info); }
+        .method-upi .method-icon { color: var(--purple); }
         .method-gcash .method-icon { color: var(--gcash); }
         .method-paymaya .method-icon { color: var(--paymaya); }
         .method-paypal .method-icon { color: var(--paypal); }
         .method-bank .method-icon { color: var(--bank); }
         .method-cash .method-icon { color: var(--success); }
-        
+
         .payment-form {
             background: rgba(255, 255, 255, 0.08);
             border-radius: 15px;
             padding: 25px;
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
-        
+
         .form-group {
             margin-bottom: 20px;
         }
-        
+
         label {
             display: block;
             color: rgba(255, 255, 255, 0.8);
@@ -373,7 +437,7 @@ function validatePayment($method, $data) {
             margin-bottom: 8px;
             font-weight: 500;
         }
-        
+
         input, select {
             width: 100%;
             background: rgba(255, 255, 255, 0.1);
@@ -384,25 +448,25 @@ function validatePayment($method, $data) {
             font-size: 16px;
             transition: all 0.2s;
         }
-        
+
         input:focus, select:focus {
             outline: none;
             border-color: var(--highlight);
             background: rgba(255, 255, 255, 0.15);
         }
-        
+
         .card-details {
             display: grid;
-            grid-template-columns: 2fr 1fr 1fr;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 15px;
         }
-        
+
         .bank-details {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 15px;
         }
-        
+
         .method-note {
             background: rgba(253, 203, 110, 0.1);
             border: 1px solid rgba(253, 203, 110, 0.2);
@@ -412,12 +476,12 @@ function validatePayment($method, $data) {
             color: rgba(255, 255, 255, 0.8);
             font-size: 14px;
         }
-        
+
         .method-note i {
             color: var(--warning);
             margin-right: 8px;
         }
-        
+
         .pay-btn {
             width: 100%;
             background: linear-gradient(135deg, var(--success), #00a085);
@@ -437,17 +501,17 @@ function validatePayment($method, $data) {
             position: relative;
             overflow: hidden;
         }
-        
+
         .pay-btn:hover {
             background: linear-gradient(135deg, #00a085, var(--success));
             transform: translateY(-2px);
         }
-        
+
         .pay-btn.processing {
             background: linear-gradient(135deg, var(--warning), #e17055);
             cursor: not-allowed;
         }
-        
+
         .pay-btn.processing::after {
             content: '';
             position: absolute;
@@ -458,16 +522,16 @@ function validatePayment($method, $data) {
             background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
             animation: processing 1.5s infinite;
         }
-        
+
         @keyframes processing {
             0% { left: -100%; }
             100% { left: 100%; }
         }
-        
+
         .hidden {
             display: none;
         }
-        
+
         .qr-code {
             text-align: center;
             margin: 20px 0;
@@ -475,7 +539,7 @@ function validatePayment($method, $data) {
             background: rgba(255, 255, 255, 0.05);
             border-radius: 10px;
         }
-        
+
         .qr-placeholder {
             width: 200px;
             height: 200px;
@@ -488,16 +552,16 @@ function validatePayment($method, $data) {
             color: rgba(255, 255, 255, 0.3);
             font-size: 14px;
         }
-        
+
         .demo-field {
             border: 1px dashed rgba(255, 255, 255, 0.3);
             background: rgba(255, 255, 255, 0.05);
         }
-        
+
         .demo-field:focus {
             border: 1px dashed var(--highlight);
         }
-        
+
         .error-message {
             background: rgba(214, 48, 49, 0.2);
             border: 1px solid rgba(214, 48, 49, 0.3);
@@ -507,22 +571,112 @@ function validatePayment($method, $data) {
             text-align: center;
             color: var(--light);
         }
-        
+
         .error-message i {
             color: var(--danger);
             margin-right: 10px;
         }
+
+        footer {
+            text-align: center;
+            padding: 22px;
+            background: rgba(10, 10, 20, 0.95);
+            margin-top: 50px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        footer p {
+            margin-bottom: 8px;
+        }
+
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 18px;
+            margin-top: 10px;
+        }
+
+        .footer-links a {
+            color: var(--highlight);
+            text-decoration: none;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .footer-links a:hover {
+            color: #ff7675;
+            text-decoration: underline;
+        }
+
+        @media (max-width: 768px) {
+            header {
+                padding: 15px 20px;
+                flex-direction: column;
+                gap: 15px;
+            }
+            
+            .header-right {
+                flex-direction: column;
+                width: 100%;
+            }
+            
+            .user-info, .back-btn {
+                width: 100%;
+                justify-content: center;
+            }
+            
+            .container {
+                padding: 0 15px;
+            }
+            
+            .page-header {
+                flex-direction: column;
+                gap: 15px;
+                text-align: center;
+            }
+            
+            .payment-methods {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .card-details, .bank-details {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .payment-methods {
+                grid-template-columns: 1fr;
+            }
+        }
     </style>
 </head>
 <body>
-    <a href="my-bookings.php" class="back-btn">
-        <i class="fas fa-arrow-left"></i> Back to Bookings
-    </a>
-    
+    <header>
+        <div class="header-left">
+            <h1><i class="fas fa-microphone-alt"></i> Sirene KTV Payment</h1>
+            <p>Complete Payment for Booking #<?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></p>
+        </div>
+        <div class="header-right">
+            <div class="user-info">
+                <i class="fas fa-user-circle"></i>
+                <?php echo htmlspecialchars($name); ?> (<?php echo ucfirst($role); ?>)
+            </div>
+            
+            <a href="booking-details.php?id=<?php echo $booking_id; ?>" class="back-btn">
+                <i class="fas fa-arrow-left"></i> Back to Booking
+            </a>
+        </div>
+    </header>
+
     <div class="container">
-        <div class="header">
-            <h1><i class="fas fa-credit-card"></i> Complete Payment</h1>
-            <p>Choose your preferred payment method</p>
+        <div class="page-header">
+            <div class="page-title">
+                <h2><i class="fas fa-credit-card"></i> Complete Payment</h2>
+                <p>Choose your preferred payment method</p>
+            </div>
         </div>
         
         <?php if (isset($_SESSION['payment_error'])): ?>
@@ -542,24 +696,26 @@ function validatePayment($method, $data) {
         </div>
         
         <div class="booking-info">
-            <div class="info-row">
-                <span class="info-label">Booking ID:</span>
-                <span class="info-value">#<?php echo str_pad($booking['b_id'], 6, '0', STR_PAD_LEFT); ?></span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Room:</span>
-                <span class="info-value"><?php echo htmlspecialchars($booking['room_name']); ?></span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Date:</span>
-                <span class="info-value"><?php echo date('F j, Y', strtotime($booking['booking_date'])); ?></span>
-            </div>
-            <div class="info-row">
-                <span class="info-label">Time:</span>
-                <span class="info-value">
-                    <?php echo date('g:i A', strtotime($booking['start_time'])); ?> - 
-                    <?php echo date('g:i A', strtotime($booking['end_time'])); ?>
-                </span>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">Booking ID</span>
+                    <span class="info-value">#<?php echo str_pad($booking['b_id'], 6, '0', STR_PAD_LEFT); ?></span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Room</span>
+                    <span class="info-value"><?php echo htmlspecialchars($booking['room_name']); ?></span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Date</span>
+                    <span class="info-value"><?php echo date('F j, Y', strtotime($booking['booking_date'])); ?></span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Time</span>
+                    <span class="info-value">
+                        <?php echo date('g:i A', strtotime($booking['start_time'])); ?> - 
+                        <?php echo date('g:i A', strtotime($booking['end_time'])); ?>
+                    </span>
+                </div>
             </div>
         </div>
         
@@ -769,6 +925,16 @@ function validatePayment($method, $data) {
         </form>
     </div>
 
+    <footer>
+        <p>&copy; 2024 Sirene KTV. All Rights Reserved.</p>
+        <div class="footer-links">
+            <a href="dashboard.php">Dashboard</a>
+            <a href="my-bookings.php">My Bookings</a>
+            <a href="#">Help</a>
+            <a href="#">Contact</a>
+        </div>
+    </footer>
+
     <script>
         let currentMethod = 'card';
         
@@ -892,6 +1058,18 @@ function validatePayment($method, $data) {
             
             // Initial auto-fill
             autoFillDemoData('card');
+            
+            // Add page load animation
+            const sections = document.querySelectorAll('.payment-section, .booking-info, .payment-form');
+            sections.forEach((section, index) => {
+                section.style.opacity = '0';
+                section.style.transform = 'translateY(20px)';
+                setTimeout(() => {
+                    section.style.transition = 'opacity 0.5s, transform 0.5s';
+                    section.style.opacity = '1';
+                    section.style.transform = 'translateY(0)';
+                }, index * 100);
+            });
         });
     </script>
 </body>

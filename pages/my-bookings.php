@@ -8,17 +8,22 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user_id = $_SESSION['user_id'];
+$name = $_SESSION['name'] ?? 'User';
+$role = $_SESSION['role'] ?? 'user';
 
 // Fetch user's bookings - use booking.payment_status since you have it in booking table
 $bookings_query = $conn->prepare("
     SELECT b.*, r.room_name, r.capcity, r.price_hr,
            b.status as booking_status,
            b.payment_status as payment_status,  -- Get from booking table
-           p.payment_status as payments_status  -- Also get from payments table for reference
+           p.payment_status as payments_status,  -- Also get from payments table for reference
+           p.amount as paid_amount,
+           p.payment_method,
+           p.payment_date
     FROM booking b 
     JOIN room r ON b.r_id = r.r_id 
     LEFT JOIN payments p ON b.b_id = p.b_id
-    WHERE b.u_id = ? 
+    WHERE b.u_id = ?
     ORDER BY b.booking_date DESC, b.start_time DESC
 ");
 
@@ -44,107 +49,196 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             --secondary: #16213e;
             --accent: #0f3460;
             --highlight: #e94560;
+            --light: #f5f5f5;
+            --dark: #0d1117;
             --success: #00b894;
             --warning: #fdcb6e;
             --danger: #d63031;
-            --light: #f5f5f5;
+            --info: #0984e3;
+            --purple: #6c5ce7;
         }
-        
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, var(--primary), var(--secondary));
             color: var(--light);
             min-height: 100vh;
         }
-        
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 20px;
+
+        header {
+            background: rgba(10, 10, 20, 0.95);
+            padding: 18px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid var(--highlight);
         }
-        
-        .header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        
-        .header h1 {
-            font-size: 36px;
+
+        .header-left h1 {
+            font-size: 26px;
             background: linear-gradient(90deg, var(--highlight), #ff7675);
             -webkit-background-clip: text;
             background-clip: text;
             color: transparent;
-            margin-bottom: 10px;
         }
-        
-        .back-btn {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            background: rgba(255, 255, 255, 0.1);
-            border: none;
-            color: white;
-            padding: 10px 20px;
-            border-radius: 25px;
-            cursor: pointer;
+
+        .header-left p {
+            color: #aaa;
+            font-size: 13px;
+            margin-top: 3px;
+        }
+
+        .header-right {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 18px;
+        }
+
+        .user-info {
+            background: var(--accent);
+            padding: 7px 14px;
+            border-radius: 18px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+        }
+
+        .user-info i {
+            color: var(--highlight);
+        }
+
+        .logout-btn {
+            background: linear-gradient(135deg, var(--highlight), #ff4757);
+            color: white;
+            border: none;
+            padding: 9px 22px;
+            border-radius: 22px;
+            font-weight: 600;
+            cursor: pointer;
             transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 13px;
+        }
+
+        .logout-btn:hover {
+            background: linear-gradient(135deg, #ff4757, var(--highlight));
+            transform: translateY(-1px);
+        }
+
+        .back-btn {
+            background: linear-gradient(135deg, var(--accent), #0f3460);
+            color: white;
+            border: none;
+            padding: 9px 22px;
+            border-radius: 22px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 13px;
             text-decoration: none;
         }
-        
+
         .back-btn:hover {
-            background: rgba(255, 255, 255, 0.2);
+            background: linear-gradient(135deg, #0f3460, var(--accent));
+            transform: translateY(-1px);
+            text-decoration: none;
+            color: white;
         }
-        
+
+        .container {
+            max-width: 1200px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 25px;
+            border-radius: 15px;
+            border-left: 4px solid var(--highlight);
+        }
+
+        .page-title h2 {
+            font-size: 28px;
+            color: var(--light);
+            margin-bottom: 5px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .page-title h2 i {
+            color: var(--highlight);
+        }
+
+        .page-title p {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 14px;
+        }
+
         .stats-cards {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
             margin-bottom: 30px;
         }
-        
+
         .stat-card {
             background: rgba(255, 255, 255, 0.08);
             border-radius: 15px;
             padding: 20px;
             text-align: center;
             border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s;
         }
-        
+
+        .stat-card:hover {
+            background: rgba(255, 255, 255, 0.12);
+            transform: translateY(-5px);
+        }
+
         .stat-icon {
             font-size: 30px;
             color: var(--highlight);
             margin-bottom: 10px;
         }
-        
+
         .stat-number {
             font-size: 32px;
             font-weight: bold;
             color: var(--light);
             margin: 10px 0;
         }
-        
+
         .stat-label {
             color: rgba(255, 255, 255, 0.6);
             font-size: 14px;
             text-transform: uppercase;
             letter-spacing: 1px;
         }
-        
+
         .bookings-list {
             display: flex;
             flex-direction: column;
             gap: 20px;
         }
-        
+
         .booking-card {
             background: rgba(255, 255, 255, 0.08);
             border-radius: 15px;
@@ -152,12 +246,12 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             border: 1px solid rgba(255, 255, 255, 0.1);
             transition: all 0.3s;
         }
-        
+
         .booking-card:hover {
             background: rgba(255, 255, 255, 0.12);
             transform: translateY(-5px);
         }
-        
+
         .booking-header {
             display: flex;
             justify-content: space-between;
@@ -166,7 +260,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             padding-bottom: 15px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
-        
+
         .booking-id {
             background: rgba(233, 69, 96, 0.2);
             color: var(--highlight);
@@ -175,7 +269,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             font-weight: bold;
             font-size: 14px;
         }
-        
+
         .booking-status {
             padding: 8px 16px;
             border-radius: 20px;
@@ -184,68 +278,68 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
-        
+
         .status-pending {
             background: rgba(253, 203, 110, 0.2);
             color: var(--warning);
             border: 1px solid rgba(253, 203, 110, 0.3);
         }
-        
+
         .status-confirmed {
             background: rgba(0, 184, 148, 0.2);
             color: var(--success);
             border: 1px solid rgba(0, 184, 148, 0.3);
         }
-        
+
         .status-cancelled {
             background: rgba(214, 48, 49, 0.2);
             color: var(--danger);
             border: 1px solid rgba(214, 48, 49, 0.3);
         }
-        
+
         .status-paid {
-            background: rgba(46, 204, 113, 0.2);
-            color: #2ecc71;
-            border: 1px solid rgba(46, 204, 113, 0.3);
+            background: rgba(0, 184, 148, 0.2);
+            color: var(--success);
+            border: 1px solid rgba(0, 184, 148, 0.3);
         }
-        
+
         .status-approved {
-            background: rgba(52, 152, 219, 0.2);
-            color: #3498db;
-            border: 1px solid rgba(52, 152, 219, 0.3);
+            background: rgba(9, 132, 227, 0.2);
+            color: var(--info);
+            border: 1px solid rgba(9, 132, 227, 0.3);
         }
-        
+
         .status-waiting-approval {
-            background: rgba(155, 89, 182, 0.2);
-            color: #9b59b6;
-            border: 1px solid rgba(155, 89, 182, 0.3);
+            background: rgba(108, 92, 231, 0.2);
+            color: var(--purple);
+            border: 1px solid rgba(108, 92, 231, 0.3);
         }
-        
+
         .status-rejected {
-            background: rgba(231, 76, 60, 0.2);
-            color: #e74c3c;
-            border: 1px solid rgba(231, 76, 60, 0.3);
+            background: rgba(214, 48, 49, 0.2);
+            color: var(--danger);
+            border: 1px solid rgba(214, 48, 49, 0.3);
         }
-        
+
         .status-completed {
             background: rgba(149, 165, 166, 0.2);
             color: #95a5a6;
             border: 1px solid rgba(149, 165, 166, 0.3);
         }
-        
+
         .booking-details {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
             margin-bottom: 20px;
         }
-        
+
         .detail-item {
             display: flex;
             align-items: center;
             gap: 15px;
         }
-        
+
         .detail-icon {
             width: 40px;
             height: 40px;
@@ -257,19 +351,19 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             color: var(--highlight);
             font-size: 18px;
         }
-        
+
         .detail-content h4 {
             color: rgba(255, 255, 255, 0.8);
             font-size: 14px;
             margin-bottom: 5px;
         }
-        
+
         .detail-content p {
             color: var(--light);
             font-size: 18px;
             font-weight: bold;
         }
-        
+
         .booking-amount {
             background: rgba(233, 69, 96, 0.1);
             padding: 20px;
@@ -277,7 +371,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             text-align: center;
             margin: 20px 0;
         }
-        
+
         .amount-label {
             color: rgba(255, 255, 255, 0.6);
             font-size: 14px;
@@ -285,34 +379,27 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             letter-spacing: 1px;
             margin-bottom: 5px;
         }
-        
+
         .amount-value {
             color: var(--highlight);
             font-size: 28px;
             font-weight: bold;
         }
-        
-        /* Reorganized Actions Section */
+
         .booking-actions {
             display: flex;
-            flex-direction: column;
-            gap: 15px;
+            gap: 10px;
             margin-top: 25px;
             padding-top: 20px;
             border-top: 1px solid rgba(255, 255, 255, 0.1);
         }
-        
-        .primary-actions {
-            display: flex;
-            gap: 10px;
+
+        @media (max-width: 768px) {
+            .booking-actions {
+                flex-direction: column;
+            }
         }
-        
-        .secondary-actions {
-            display: flex;
-            gap: 10px;
-            justify-content: flex-start;
-        }
-        
+
         .action-btn {
             flex: 1;
             padding: 12px;
@@ -327,101 +414,85 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             gap: 8px;
             font-size: 14px;
             min-width: 120px;
+            text-decoration: none;
         }
-        
+
+        .action-btn:hover {
+            transform: translateY(-2px);
+        }
+
         .action-primary {
             background: linear-gradient(135deg, var(--highlight), #ff4757);
             color: white;
-            flex: 2; /* Make payment button wider */
         }
-        
+
         .action-primary:hover {
             background: linear-gradient(135deg, #ff4757, var(--highlight));
-            transform: translateY(-2px);
         }
-        
+
         .action-secondary {
             background: rgba(255, 255, 255, 0.1);
             color: white;
             border: 1px solid rgba(255, 255, 255, 0.2);
         }
-        
+
         .action-secondary:hover {
             background: rgba(255, 255, 255, 0.2);
-            transform: translateY(-2px);
         }
-        
+
         .action-success {
             background: linear-gradient(135deg, var(--success), #00a085);
             color: white;
-            flex: 2; /* Make receipt button wider */
         }
-        
+
         .action-success:hover {
             background: linear-gradient(135deg, #00a085, var(--success));
-            transform: translateY(-2px);
         }
-        
+
         .action-info {
-            background: linear-gradient(135deg, #3498db, #2980b9);
+            background: linear-gradient(135deg, var(--info), #2980b9);
             color: white;
         }
-        
+
         .action-info:hover {
-            background: linear-gradient(135deg, #2980b9, #3498db);
-            transform: translateY(-2px);
+            background: linear-gradient(135deg, #2980b9, var(--info));
         }
-        
+
         .action-danger {
             background: linear-gradient(135deg, var(--danger), #c0392b);
             color: white;
         }
-        
+
         .action-danger:hover {
             background: linear-gradient(135deg, #c0392b, var(--danger));
-            transform: translateY(-2px);
         }
-        
+
         .action-warning {
             background: linear-gradient(135deg, var(--warning), #e8a822);
             color: #333;
         }
-        
+
         .action-warning:hover {
             background: linear-gradient(135deg, #e8a822, var(--warning));
-            transform: translateY(-2px);
         }
-        
-        /* Action button groups */
-        .action-group {
-            display: flex;
-            gap: 10px;
-        }
-        
-        /* Single action button (when only one action is available) */
-        .single-action {
-            justify-content: center;
-            max-width: 300px;
-            margin: 0 auto;
-        }
-        
+
         .empty-state {
             text-align: center;
             padding: 60px 20px;
         }
-        
+
         .empty-state i {
             font-size: 80px;
             color: rgba(255, 255, 255, 0.1);
             margin-bottom: 20px;
         }
-        
+
         .empty-state h3 {
             font-size: 24px;
             color: var(--light);
             margin-bottom: 10px;
         }
-        
+
         .empty-state p {
             color: rgba(255, 255, 255, 0.6);
             margin-bottom: 30px;
@@ -430,7 +501,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             margin-right: auto;
             line-height: 1.6;
         }
-        
+
         .empty-state .btn {
             display: inline-block;
             padding: 15px 30px;
@@ -441,19 +512,18 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             font-weight: bold;
             transition: all 0.2s;
         }
-        
+
         .empty-state .btn:hover {
             transform: translateY(-2px);
         }
-        
-        /* Status and Approval Section */
+
         .status-container {
             display: flex;
             flex-direction: column;
             gap: 8px;
             align-items: flex-end;
         }
-        
+
         .booking-approval-status {
             font-size: 11px;
             padding: 4px 10px;
@@ -462,8 +532,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             text-transform: uppercase;
             letter-spacing: 0.3px;
         }
-        
-        /* Booking Date Indicator */
+
         .booking-date-indicator {
             display: flex;
             align-items: center;
@@ -472,11 +541,11 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             color: rgba(255, 255, 255, 0.7);
             margin-top: 5px;
         }
-        
+
         .booking-date-indicator i {
             font-size: 10px;
         }
-        
+
         .upcoming-badge {
             background: rgba(46, 204, 113, 0.2);
             color: #2ecc71;
@@ -486,7 +555,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             font-weight: bold;
             margin-left: 5px;
         }
-        
+
         .past-badge {
             background: rgba(149, 165, 166, 0.2);
             color: #95a5a6;
@@ -496,7 +565,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             font-weight: bold;
             margin-left: 5px;
         }
-        
+
         /* Modal Styles */
         .modal {
             display: none;
@@ -512,12 +581,12 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             align-items: center;
             animation: fadeIn 0.3s ease;
         }
-        
+
         @keyframes fadeIn {
             from { opacity: 0; }
             to { opacity: 1; }
         }
-        
+
         .modal-content {
             background: linear-gradient(135deg, var(--primary), var(--secondary));
             width: 90%;
@@ -527,12 +596,12 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             overflow: hidden;
             animation: slideUp 0.3s ease;
         }
-        
+
         @keyframes slideUp {
             from { transform: translateY(50px); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
         }
-        
+
         .modal-header {
             background: rgba(233, 69, 96, 0.1);
             padding: 20px;
@@ -541,21 +610,21 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             align-items: center;
             gap: 15px;
         }
-        
+
         .modal-header i {
             color: var(--danger);
             font-size: 24px;
         }
-        
+
         .modal-header h3 {
             color: var(--light);
             font-size: 20px;
         }
-        
+
         .modal-body {
             padding: 25px;
         }
-        
+
         .booking-info-modal {
             background: rgba(255, 255, 255, 0.05);
             border-radius: 10px;
@@ -563,27 +632,27 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             margin-bottom: 25px;
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
-        
+
         .info-row {
             display: flex;
             justify-content: space-between;
             padding: 10px 0;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
-        
+
         .info-row:last-child {
             border-bottom: none;
         }
-        
+
         .info-label {
             color: rgba(255, 255, 255, 0.6);
         }
-        
+
         .info-value {
             color: var(--light);
             font-weight: bold;
         }
-        
+
         .warning-message {
             background: rgba(214, 48, 49, 0.1);
             border: 1px solid rgba(214, 48, 49, 0.2);
@@ -593,23 +662,23 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             color: rgba(255, 255, 255, 0.9);
             line-height: 1.6;
         }
-        
+
         .warning-message i {
             color: var(--danger);
             margin-right: 10px;
         }
-        
+
         .reason-section {
             margin-bottom: 25px;
         }
-        
+
         .reason-section label {
             display: block;
             color: rgba(255, 255, 255, 0.8);
             margin-bottom: 10px;
             font-weight: 500;
         }
-        
+
         .reason-section select {
             width: 100%;
             background: rgba(255, 255, 255, 0.1);
@@ -620,7 +689,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             font-size: 16px;
             margin-bottom: 15px;
         }
-        
+
         .reason-section textarea {
             width: 100%;
             background: rgba(255, 255, 255, 0.1);
@@ -632,19 +701,19 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             resize: vertical;
             min-height: 100px;
         }
-        
+
         .reason-section textarea:focus {
             outline: none;
             border-color: var(--danger);
         }
-        
+
         .modal-footer {
             display: flex;
             gap: 15px;
             padding: 20px;
             border-top: 1px solid rgba(255, 255, 255, 0.1);
         }
-        
+
         .modal-btn {
             flex: 1;
             padding: 14px;
@@ -655,28 +724,91 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             transition: all 0.2s;
             font-size: 16px;
         }
-        
+
         .modal-btn-cancel {
             background: rgba(255, 255, 255, 0.1);
             color: white;
             border: 1px solid rgba(255, 255, 255, 0.2);
         }
-        
+
         .modal-btn-cancel:hover {
             background: rgba(255, 255, 255, 0.2);
         }
-        
+
         .modal-btn-confirm {
             background: linear-gradient(135deg, var(--danger), #c0392b);
             color: white;
         }
-        
+
         .modal-btn-confirm:hover {
             background: linear-gradient(135deg, #c0392b, var(--danger));
             transform: translateY(-2px);
         }
-        
+
+        footer {
+            text-align: center;
+            padding: 22px;
+            background: rgba(10, 10, 20, 0.95);
+            margin-top: 50px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        footer p {
+            margin-bottom: 8px;
+        }
+
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 18px;
+            margin-top: 10px;
+        }
+
+        .footer-links a {
+            color: var(--highlight);
+            text-decoration: none;
+            font-size: 12px;
+            transition: all 0.2s;
+        }
+
+        .footer-links a:hover {
+            color: #ff7675;
+            text-decoration: underline;
+        }
+
         @media (max-width: 768px) {
+            header {
+                padding: 15px 20px;
+                flex-direction: column;
+                gap: 15px;
+            }
+            
+            .header-right {
+                flex-direction: column;
+                width: 100%;
+            }
+            
+            .user-info, .back-btn, .logout-btn {
+                width: 100%;
+                justify-content: center;
+            }
+            
+            .container {
+                padding: 0 15px;
+            }
+            
+            .page-header {
+                flex-direction: column;
+                gap: 15px;
+                text-align: center;
+            }
+            
+            .stats-cards {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
             .booking-header {
                 flex-direction: column;
                 gap: 15px;
@@ -691,15 +823,6 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                 grid-template-columns: 1fr;
             }
             
-            .primary-actions,
-            .secondary-actions {
-                flex-direction: column;
-            }
-            
-            .stats-cards {
-                grid-template-columns: repeat(2, 1fr);
-            }
-            
             .modal-content {
                 width: 95%;
                 margin: 10px;
@@ -709,7 +832,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                 flex-direction: column;
             }
         }
-        
+
         @media (max-width: 480px) {
             .stats-cards {
                 grid-template-columns: 1fr;
@@ -722,14 +845,35 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
     </style>
 </head>
 <body>
-    <a href="dashboard.php" class="back-btn">
-        <i class="fas fa-arrow-left"></i> Back to Dashboard
-    </a>
-    
+    <header>
+        <div class="header-left">
+            <h1><i class="fas fa-microphone-alt"></i> Sirene KTV</h1>
+            <p>My Bookings Management</p>
+        </div>
+        <div class="header-right">
+            <div class="user-info">
+                <i class="fas fa-user-circle"></i>
+                <?php echo htmlspecialchars($name); ?> (<?php echo ucfirst($role); ?>)
+            </div>
+            
+            <a href="dashboard.php" class="back-btn">
+                <i class="fas fa-home"></i> Dashboard
+            </a>
+            
+            <form action="logout.php" method="post">
+                <button type="submit" class="logout-btn">
+                    <i class="fas fa-sign-out-alt"></i> Logout
+                </button>
+            </form>
+        </div>
+    </header>
+
     <div class="container">
-        <div class="header">
-            <h1><i class="fas fa-list-alt"></i> My Bookings</h1>
-            <p>View and manage all your KTV bookings</p>
+        <div class="page-header">
+            <div class="page-title">
+                <h2><i class="fas fa-calendar-check"></i> My Bookings</h2>
+                <p>View and manage all your KTV bookings</p>
+            </div>
         </div>
         
         <?php if (!empty($bookings)): ?>
@@ -756,12 +900,14 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                 
                 <?php
                 $total_spent = 0;
+                $paid_bookings = 0;
                 foreach ($bookings as $booking) {
                     $paymentStatus = isset($booking['payment_status']) ? strtolower($booking['payment_status']) : null;
                     $bookingStatus = isset($booking['booking_status']) ? strtolower($booking['booking_status']) : 'pending';
                     
                     if ($paymentStatus == 'paid' || $paymentStatus == 'approved' || $bookingStatus == 'approved') {
                         $total_spent += $booking['total_amount'];
+                        $paid_bookings++;
                     }
                 }
                 ?>
@@ -773,18 +919,8 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                 
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
-                    <div class="stat-number">
-                        <?php 
-                        $paid = array_filter($bookings, function($b) {
-                            $paymentStatus = isset($b['payment_status']) ? strtolower($b['payment_status']) : null;
-                            $bookingStatus = isset($b['booking_status']) ? strtolower($b['booking_status']) : 'pending';
-                            
-                            return $paymentStatus == 'paid' || $paymentStatus == 'approved';
-                        });
-                        echo count($paid);
-                        ?>
-                    </div>
-                    <div class="stat-label">Paid</div>
+                    <div class="stat-number"><?php echo $paid_bookings; ?></div>
+                    <div class="stat-label">Paid Bookings</div>
                 </div>
             </div>
             
@@ -794,28 +930,31 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                     $bookingStatus = isset($booking['booking_status']) ? strtolower($booking['booking_status']) : 'pending';
                     $paymentStatus = isset($booking['payment_status']) ? strtolower($booking['payment_status']) : 'pending';
                     
-                    $status_class = 'status-pending';
                     $status_text = 'Pending';
+                    $status_class = 'status-pending';
                     
                     // Priority: cancelled > completed > payment status > booking status
                     if ($bookingStatus == 'cancelled') {
-                        $status_class = 'status-cancelled';
                         $status_text = 'Cancelled';
+                        $status_class = 'status-cancelled';
                     } elseif ($bookingStatus == 'completed') {
-                        $status_class = 'status-completed';
                         $status_text = 'Completed';
+                        $status_class = 'status-completed';
                     } elseif ($paymentStatus == 'paid' || $paymentStatus == 'approved') {
-                        $status_class = 'status-paid';
                         $status_text = 'Paid';
+                        $status_class = 'status-paid';
                     } elseif ($bookingStatus == 'approved') {
-                        $status_class = 'status-approved';
                         $status_text = 'Approved';
+                        $status_class = 'status-approved';
                     } elseif ($bookingStatus == 'rejected') {
-                        $status_class = 'status-rejected';
                         $status_text = 'Rejected';
+                        $status_class = 'status-rejected';
                     } elseif ($bookingStatus == 'pending') {
+                        $status_text = 'Pending Approval';
                         $status_class = 'status-waiting-approval';
-                        $status_text = 'Waiting Approval';
+                    } elseif ($bookingStatus == 'confirmed') {
+                        $status_text = 'Confirmed';
+                        $status_class = 'status-confirmed';
                     }
                     
                     // Check if booking is upcoming
@@ -825,10 +964,14 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                     $timeBadgeText = $isUpcoming ? 'UPCOMING' : 'PAST';
                     
                     // Determine if booking can be cancelled
-                    $canCancel = ($status_text == 'Waiting Approval' || $status_text == 'Approved' || $status_text == 'Pending') && $isUpcoming && $bookingStatus != 'cancelled';
+                    $canCancel = ($status_text == 'Pending Approval' || $status_text == 'Approved' || $status_text == 'Confirmed') && 
+                                 $isUpcoming && $bookingStatus != 'cancelled';
                     
                     // Determine if payment button should be shown
-                    $showPaymentBtn = ($paymentStatus == 'pending' || $paymentStatus == '') && $bookingStatus != 'cancelled' && $bookingStatus != 'rejected' && $bookingStatus == 'approved';
+                    $showPaymentBtn = ($paymentStatus == 'pending' || $paymentStatus == '') && 
+                                     $bookingStatus != 'cancelled' && 
+                                     $bookingStatus != 'rejected' && 
+                                     ($bookingStatus == 'approved' || $bookingStatus == 'confirmed');
                     
                     // Show approval status badge
                     $approvalBadge = '';
@@ -845,13 +988,18 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                         $approvalBadgeClass = 'booking-approval-status status-rejected';
                     }
                     
-                    // Count available actions for responsive layout
-                    $actionCount = 0;
-                    if ($showPaymentBtn) $actionCount++;
-                    if ($paymentStatus == 'paid' || $paymentStatus == 'approved' || $bookingStatus == 'completed') $actionCount++;
-                    if ($canCancel) $actionCount++;
-                    // Always have at least View Details button
-                    $actionCount++;
+                    // Calculate hours
+                    $start = new DateTime($booking['start_time']);
+                    $end = new DateTime($booking['end_time']);
+                    $interval = $start->diff($end);
+                    $hours = $interval->h;
+                    $minutes = $interval->i;
+                    $duration = $hours;
+                    if ($minutes > 0) {
+                        $duration .= 'h ' . $minutes . 'm';
+                    } else {
+                        $duration .= ' hours';
+                    }
                 ?>
                     <div class="booking-card">
                         <div class="booking-header">
@@ -907,17 +1055,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                                 <div class="detail-icon"><i class="fas fa-hourglass-half"></i></div>
                                 <div class="detail-content">
                                     <h4>Duration</h4>
-                                    <p>
-                                        <?php 
-                                        $start = new DateTime($booking['start_time']);
-                                        $end = new DateTime($booking['end_time']);
-                                        $interval = $start->diff($end);
-                                        echo $interval->format('%h') . ' hours';
-                                        if ($interval->format('%i') > 0) {
-                                            echo ' ' . $interval->format('%i') . ' mins';
-                                        }
-                                        ?>
-                                    </p>
+                                    <p><?php echo $duration; ?></p>
                                 </div>
                             </div>
                         </div>
@@ -925,35 +1063,35 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                         <div class="booking-amount">
                             <div class="amount-label">Total Amount</div>
                             <div class="amount-value">₹<?php echo number_format($booking['total_amount'], 2); ?></div>
-                        </div>
-                        
-                        <!-- Reorganized Actions Section -->
-                        <div class="booking-actions">
-                            <?php if ($showPaymentBtn): ?>
-                                <div class="primary-actions">
-                                    <button class="action-btn action-primary" onclick="makePayment(<?php echo $booking['b_id']; ?>)">
-                                        <i class="fas fa-credit-card"></i> Make Payment
-                                    </button>
+                            <?php if ($booking['paid_amount'] > 0): ?>
+                                <div style="margin-top: 10px; color: rgba(255,255,255,0.7); font-size: 14px;">
+                                    Paid: ₹<?php echo number_format($booking['paid_amount'], 2); ?>
                                 </div>
                             <?php endif; ?>
+                        </div>
+                        
+                        <div class="booking-actions">
+                            <?php if ($showPaymentBtn): ?>
+                                <a href="payment.php?id=<?php echo $booking['b_id']; ?>" class="action-btn action-primary">
+                                    <i class="fas fa-credit-card"></i> Make Payment
+                                </a>
+                            <?php endif; ?>
                             
-                            <div class="secondary-actions">
-                                <?php if ($paymentStatus == 'paid' || $paymentStatus == 'approved' || $bookingStatus == 'completed'): ?>
-                                    <button class="action-btn action-success" onclick="viewReceipt(<?php echo $booking['b_id']; ?>)">
-                                        <i class="fas fa-receipt"></i> View Receipt
-                                    </button>
-                                <?php endif; ?>
-                                
-                                <button class="action-btn action-secondary" onclick="viewBooking(<?php echo $booking['b_id']; ?>)">
-                                    <i class="fas fa-eye"></i> View Details
+                            <?php if ($paymentStatus == 'paid' || $paymentStatus == 'approved' || $bookingStatus == 'completed'): ?>
+                                <a href="receipt.php?id=<?php echo $booking['b_id']; ?>" class="action-btn action-success">
+                                    <i class="fas fa-receipt"></i> View Receipt
+                                </a>
+                            <?php endif; ?>
+                            
+                            <a href="booking-details.php?id=<?php echo $booking['b_id']; ?>" class="action-btn action-secondary">
+                                <i class="fas fa-eye"></i> View Details
+                            </a>
+                            
+                            <?php if ($canCancel): ?>
+                                <button class="action-btn action-danger" onclick="openCancelModal(<?php echo $booking['b_id']; ?>, '<?php echo addslashes($booking['room_name']); ?>', '<?php echo date('F j, Y', strtotime($booking['booking_date'])); ?>', '<?php echo date('g:i A', strtotime($booking['start_time'])); ?>', '<?php echo date('g:i A', strtotime($booking['end_time'])); ?>', <?php echo $booking['total_amount']; ?>)">
+                                    <i class="fas fa-times"></i> Cancel Booking
                                 </button>
-                                
-                                <?php if ($canCancel): ?>
-                                    <button class="action-btn action-danger" onclick="openCancelModal(<?php echo $booking['b_id']; ?>, '<?php echo addslashes($booking['room_name']); ?>', '<?php echo date('F j, Y', strtotime($booking['booking_date'])); ?>', '<?php echo date('g:i A', strtotime($booking['start_time'])); ?>', '<?php echo date('g:i A', strtotime($booking['end_time'])); ?>', <?php echo $booking['total_amount']; ?>)">
-                                        <i class="fas fa-times"></i> Cancel Booking
-                                    </button>
-                                <?php endif; ?>
-                            </div>
+                            <?php endif; ?>
                         </div>
                     </div>
                 <?php endforeach; ?>
@@ -1022,21 +1160,17 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
         </div>
     </div>
 
+    <footer>
+        <p>&copy; 2024 Sirene KTV. All Rights Reserved.</p>
+        <div class="footer-links">
+            <a href="dashboard.php">Dashboard</a>
+            <a href="my-bookings.php">My Bookings</a>
+            <a href="#">Help</a>
+            <a href="#">Contact</a>
+        </div>
+    </footer>
+
     <script>
-        let currentBookingId = null;
-        
-        function viewBooking(bookingId) {
-            window.location.href = 'booking-details.php?id=' + bookingId;
-        }
-        
-        function viewReceipt(bookingId) {
-            window.location.href = 'receipt.php?id=' + bookingId;
-        }
-        
-        function makePayment(bookingId) {
-            window.location.href = 'payment.php?id=' + bookingId;
-        }
-        
         function openCancelModal(bookingId, roomName, bookingDate, startTime, endTime, totalAmount) {
             currentBookingId = bookingId;
             
@@ -1137,6 +1271,20 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             confirmBtn.disabled = true;
             
             return true;
+        });
+        
+        // Add page load animation
+        document.addEventListener('DOMContentLoaded', function() {
+            const bookings = document.querySelectorAll('.booking-card');
+            bookings.forEach((card, index) => {
+                card.style.opacity = '0';
+                card.style.transform = 'translateY(20px)';
+                setTimeout(() => {
+                    card.style.transition = 'opacity 0.5s, transform 0.5s';
+                    card.style.opacity = '1';
+                    card.style.transform = 'translateY(0)';
+                }, index * 100);
+            });
         });
     </script>
 </body>

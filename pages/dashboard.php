@@ -15,24 +15,39 @@ $name = $_SESSION['name'];
 $user_id = $_SESSION['user_id'];
 $role = $_SESSION['role'] ?? 'user';
 
-// Check if user has an active booking (booked today or future)
+// Check if user has an ACTIVE booking (not cancelled, not completed, and not past date)
 $has_active_booking = false;
-$today = date('Y-m-d');
+$current_date = date('Y-m-d');
+$current_time = date('H:i:s');
+$active_booking_details = null;
+
+// Check for active bookings (not cancelled, not completed, and booking date is today or future)
 $check_booking_query = $conn->query("
-    SELECT COUNT(*) as count FROM booking 
-    WHERE u_id = $user_id 
-    AND status IN ('Approved', 'Pending') 
-    AND booking_date >= '$today'
+    SELECT b.*, r.room_name 
+    FROM booking b 
+    LEFT JOIN room r ON b.r_id = r.r_id 
+    WHERE b.u_id = $user_id 
+    AND b.status NOT IN ('cancelled', 'completed', 'rejected') 
+    AND (
+        b.booking_date > '$current_date' 
+        OR (b.booking_date = '$current_date' AND b.end_time > '$current_time')
+    )
+    ORDER BY b.booking_date ASC, b.start_time ASC
 ");
-$booking_result = $check_booking_query->fetch_assoc();
-if ($booking_result['count'] > 0) {
+
+if ($check_booking_query->num_rows > 0) {
     $has_active_booking = true;
+    $active_booking_details = $check_booking_query->fetch_assoc();
 }
 
 // Check active tab from URL or default to rooms
 $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'rooms';
 
-// Fetch rooms data
+// Fetch rooms data (ALWAYS fetch rooms, regardless of booking status)
+$rooms = [];
+$available_rooms_count = 0;
+
+// ALWAYS fetch rooms
 $rooms_query = $conn->query("SELECT * FROM room WHERE status = 'Available' ORDER BY r_id DESC");
 $rooms = $rooms_query->fetch_all(MYSQLI_ASSOC);
 $available_rooms_count = count($rooms);
@@ -46,8 +61,8 @@ $foods_count = count($foods);
 $food_images = [
     // Appetizers
     'Cheese Balls' => '../images/cheese-balls.jpg',
-    'Chicken Lollipop' => '../images/chicken-lollipop.jpg',
-    'Chicken Wings' => '../images//chicken-wings.jpg',
+    'Chicken Lollipop' => '../images/chicken-loplipop.jpg',
+    'Chicken Wings' => '../images/chicken-wings.jpg',
     'Paneer Tikka' => '../images/paneer-tikka.jpg',
     'Spring Rolls (Veg)' => '../images/spring-rolls.jpg',
     
@@ -88,11 +103,6 @@ $food_images = [
 
 // Default image if not found
 $default_food_image = '../../images/food/default.jpg';
-
-// Room images (if you want to add room images later)
-$room_images = [
-    // Example: 'VIP Suite' => '../../images/rooms/vip-suite.jpg',
-];
 
 // Calculate stats
 $avg_capacity = 0;
@@ -245,6 +255,117 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
         @keyframes fadeIn {
             from { opacity: 0; transform: translateY(10px); }
             to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Active Booking Banner */
+        .active-booking-banner {
+            background: linear-gradient(135deg, var(--accent), #0f3460);
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 30px;
+            border: 2px solid var(--highlight);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .active-booking-banner::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 5px;
+            background: linear-gradient(90deg, var(--highlight), #ff7675);
+        }
+
+        .banner-header {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+
+        .banner-header i {
+            font-size: 30px;
+            color: var(--highlight);
+        }
+
+        .banner-header h2 {
+            font-size: 22px;
+            color: var(--light);
+        }
+
+        .banner-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        .banner-detail {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .banner-detail i {
+            color: var(--highlight);
+            font-size: 16px;
+            width: 24px;
+        }
+
+        .banner-detail-label {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .banner-detail-value {
+            font-weight: 600;
+            color: var(--light);
+        }
+
+        .banner-actions {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .banner-btn {
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border: none;
+            text-decoration: none;
+        }
+
+        .banner-btn-primary {
+            background: linear-gradient(135deg, var(--highlight), #ff4757);
+            color: white;
+        }
+
+        .banner-btn-primary:hover {
+            background: linear-gradient(135deg, #ff4757, var(--highlight));
+            transform: translateY(-2px);
+        }
+
+        .banner-btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--light);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .banner-btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: translateY(-2px);
         }
 
         /* Section Headers */
@@ -497,17 +618,61 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
             box-shadow: 0 8px 20px rgba(233, 69, 96, 0.4);
         }
 
-        .action-btn:disabled {
+        .action-btn.disabled {
             background: rgba(255, 255, 255, 0.1);
-            color: #666;
             cursor: not-allowed;
+            opacity: 0.5;
+        }
+
+        .action-btn.disabled:hover {
             transform: none;
             box-shadow: none;
         }
 
-        .action-btn:disabled:hover {
+        /* Booking Restricted Button */
+        .booking-restricted-btn {
+            background: linear-gradient(135deg, var(--warning), #e17055);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: not-allowed;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            font-size: 15px;
+            opacity: 0.8;
+        }
+
+        .booking-restricted-btn:hover {
             transform: none;
             box-shadow: none;
+        }
+
+        .view-btn {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--light);
+            border: none;
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            font-size: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .view-btn:hover {
+            background: rgba(233, 69, 96, 0.1);
+            border-color: var(--highlight);
+            transform: translateY(-2px);
         }
 
         /* Food Image */
@@ -898,95 +1063,6 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
             transform: translateY(-2px);
         }
 
-        /* Booking Required Modal */
-        .booking-required-modal {
-            z-index: 2000;
-        }
-
-        .booking-required-content {
-            max-width: 450px;
-            text-align: center;
-            border-color: var(--warning);
-        }
-
-        .booking-required-icon {
-            font-size: 70px;
-            margin-bottom: 20px;
-            color: var(--warning);
-        }
-
-        .booking-required-title {
-            font-size: 28px;
-            margin-bottom: 15px;
-            color: var(--light);
-        }
-
-        .booking-required-message {
-            font-size: 16px;
-            line-height: 1.6;
-            margin-bottom: 25px;
-            color: #ddd;
-        }
-
-        .booking-required-actions {
-            display: flex;
-            justify-content: center;
-            gap: 15px;
-            margin-top: 20px;
-        }
-
-        .btn-book-room {
-            background: var(--highlight);
-            color: white;
-            border: none;
-            padding: 12px 30px;
-            border-radius: 8px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s;
-            min-width: 150px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-        }
-
-        .btn-book-room:hover {
-            background: #ff4757;
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(233, 69, 96, 0.3);
-        }
-
-        /* Food Order Success Modal */
-        .food-order-success-modal {
-            z-index: 2000;
-        }
-
-        .food-order-success-content {
-            max-width: 450px;
-            text-align: center;
-            border-color: var(--success);
-        }
-
-        .food-order-success-icon {
-            font-size: 70px;
-            margin-bottom: 20px;
-            color: var(--success);
-        }
-
-        .food-order-success-title {
-            font-size: 28px;
-            margin-bottom: 15px;
-            color: var(--light);
-        }
-
-        .food-order-success-message {
-            font-size: 16px;
-            line-height: 1.6;
-            margin-bottom: 25px;
-            color: #ddd;
-        }
-
         /* Responsive */
         @media (max-width: 1024px) {
             .dashboard-container {
@@ -1036,6 +1112,14 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
             .modal-actions {
                 flex-direction: column;
             }
+            
+            .banner-actions {
+                flex-direction: column;
+            }
+            
+            .banner-details {
+                grid-template-columns: 1fr;
+            }
         }
 
         @media (max-width: 480px) {
@@ -1053,6 +1137,21 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
                 align-self: flex-start;
             }
         }
+
+        .info-note {
+            background: rgba(233, 69, 96, 0.1);
+            border: 1px solid rgba(233, 69, 96, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            margin-top: 20px;
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .info-note i {
+            color: var(--highlight);
+            margin-right: 8px;
+        }
     </style>
 </head>
 <body>
@@ -1069,7 +1168,7 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
                 <i class="fas fa-calendar-plus"></i>
             </div>
             <h2 class="modal-title" id="modalRoomTitle">Book This Room?</h2>
-            <p class="modal-subtitle">Confirm booking for selected room</p>
+            <p class="modal-subtitle">You can add food & drinks during booking</p>
             
             <div class="modal-details">
                 <div class="modal-item-name" id="modalRoomName"></div>
@@ -1086,7 +1185,7 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
                     </div>
                 </div>
                 <p style="color: rgba(255,255,255,0.7); font-size: 14px; margin-top: 15px;">
-                    <i class="fas fa-info-circle"></i> You will be redirected to booking page to select date and time
+                    <i class="fas fa-info-circle"></i> You will be redirected to booking page where you can add food & drinks
                 </p>
             </div>
             
@@ -1102,19 +1201,19 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
     </div>
 </div>
 
-<!-- Food Order Modal -->
-<div id="foodOrderModal" class="modal">
+<!-- Food Details Modal -->
+<div id="foodDetailsModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h2><i class="fas fa-utensils"></i> Order Food</h2>
-            <button class="close-modal" onclick="closeModal('foodOrderModal')">&times;</button>
+            <h2><i class="fas fa-utensils"></i> Food Details</h2>
+            <button class="close-modal" onclick="closeModal('foodDetailsModal')">&times;</button>
         </div>
         <div class="modal-body">
             <div class="modal-icon">
-                <i class="fas fa-shopping-cart"></i>
+                <i class="fas fa-info-circle"></i>
             </div>
-            <h2 class="modal-title" id="modalFoodTitle">Order This Item?</h2>
-            <p class="modal-subtitle">Add selected item to your order</p>
+            <h2 class="modal-title" id="modalFoodTitle">Item Details</h2>
+            <p class="modal-subtitle">View food item information</p>
             
             <div class="modal-details">
                 <div class="modal-item-name" id="modalFoodName"></div>
@@ -1132,77 +1231,13 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
                 </div>
                 <div id="modalFoodStock"></div>
                 <p style="color: rgba(255,255,255,0.7); font-size: 14px; margin-top: 15px;">
-                    <i class="fas fa-info-circle"></i> Food orders are placed for your booked KTV sessions
+                    <i class="fas fa-info-circle"></i> You can add this item to your order when booking a room
                 </p>
             </div>
             
             <div class="modal-actions">
-                <button class="modal-btn cancel" onclick="closeModal('foodOrderModal')">
-                    <i class="fas fa-times-circle"></i> Cancel
-                </button>
-                <button class="modal-btn confirm" onclick="processFoodOrder()">
-                    <i class="fas fa-check-circle"></i> Yes, Order Now
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Booking Required Modal -->
-<div id="bookingRequiredModal" class="modal booking-required-modal">
-    <div class="modal-content booking-required-content">
-        <div class="modal-header">
-            <h2><i class="fas fa-exclamation-triangle"></i> Booking Required</h2>
-            <button class="close-modal" onclick="closeModal('bookingRequiredModal')">&times;</button>
-        </div>
-        <div class="modal-body">
-            <div class="booking-required-icon">
-                <i class="fas fa-door-closed"></i>
-            </div>
-            <h2 class="booking-required-title">Book a Room First!</h2>
-            <div class="booking-required-message">
-                You need to book a KTV room before ordering food or drinks. 
-                Food orders can only be placed for your booked sessions.
-                <br><br>
-                <strong>Steps to order food:</strong>
-                <ol style="text-align: left; margin: 10px 0; padding-left: 20px;">
-                    <li>Book a room first</li>
-                    <li>Wait for booking approval</li>
-                    <li>Then you can order food for your session</li>
-                </ol>
-            </div>
-            <div class="booking-required-actions">
-                <button type="button" class="modal-btn cancel" onclick="closeModal('bookingRequiredModal')">
-                    <i class="fas fa-times"></i> Cancel
-                </button>
-                <button type="button" class="btn-book-room" onclick="redirectToRooms()">
-                    <i class="fas fa-calendar-plus"></i> Book a Room
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Food Order Success Modal -->
-<div id="foodOrderSuccessModal" class="modal food-order-success-modal">
-    <div class="modal-content food-order-success-content">
-        <div class="modal-header">
-            <h2><i class="fas fa-check-circle"></i> Order Successful</h2>
-            <button class="close-modal" onclick="closeModal('foodOrderSuccessModal')">&times;</button>
-        </div>
-        <div class="modal-body">
-            <div class="food-order-success-icon">
-                <i class="fas fa-check-circle"></i>
-            </div>
-            <h2 class="food-order-success-title" id="successFoodTitle">Order Placed!</h2>
-            <div class="food-order-success-message" id="successFoodMessage">
-                Your food order has been successfully recorded. 
-                <br><br>
-                Your order will be prepared and served during your KTV session.
-            </div>
-            <div class="booking-required-actions">
-                <button type="button" class="btn-book-room" onclick="closeModal('foodOrderSuccessModal')">
-                    <i class="fas fa-check"></i> OK
+                <button class="modal-btn cancel" onclick="closeModal('foodDetailsModal')" style="width: 100%;">
+                    <i class="fas fa-times-circle"></i> Close
                 </button>
             </div>
         </div>
@@ -1272,37 +1307,109 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
             <ul class="quick-actions">
                 <li class="action-item" onclick="switchTab('rooms')">
                     <div class="action-icon"><i class="fas fa-door-closed"></i></div>
-                    <div class="action-text">View Available Rooms</div>
+                    <div class="action-text">Browse Rooms</div>
                     <i class="fas fa-chevron-right"></i>
                 </li>
                 <li class="action-item" onclick="switchTab('foods')">
                     <div class="action-icon"><i class="fas fa-utensils"></i></div>
-                    <div class="action-text">Browse Food Menu</div>
+                    <div class="action-text">View Food Menu</div>
                     <i class="fas fa-chevron-right"></i>
                 </li>
                 <li class="action-item" onclick="window.location.href='my-bookings.php'">
                     <div class="action-icon"><i class="fas fa-calendar-check"></i></div>
-                    <div class="action-text">View My Bookings</div>
-                    <i class="fas fa-chevron-right"></i>
-                </li>
-                <li class="action-item" onclick="contactSupport()">
-                    <div class="action-icon"><i class="fas fa-headset"></i></div>
-                    <div class="action-text">Contact Support</div>
+                    <div class="action-text">My Bookings</div>
                     <i class="fas fa-chevron-right"></i>
                 </li>
             </ul>
+            <div class="info-note">
+                <i class="fas fa-info-circle"></i>
+                <strong>Note:</strong> Food & drinks can only be ordered when booking a room.
+            </div>
         </div>
     </div>
 
     <!-- Main Content -->
     <div class="main-content">
+        <!-- Show Active Booking Banner if user has an active booking -->
+        <?php if ($has_active_booking && $active_booking_details): ?>
+            <div class="active-booking-banner">
+                <div class="banner-header">
+                    <i class="fas fa-calendar-check"></i>
+                    <h2>You Have an Active Booking</h2>
+                </div>
+                
+                <div class="banner-details">
+                    <div class="banner-detail">
+                        <i class="fas fa-calendar"></i>
+                        <div>
+                            <div class="banner-detail-label">Booking Date</div>
+                            <div class="banner-detail-value">
+                                <?php echo date('F j, Y', strtotime($active_booking_details['booking_date'])); ?>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="banner-detail">
+                        <i class="fas fa-clock"></i>
+                        <div>
+                            <div class="banner-detail-label">Time Slot</div>
+                            <div class="banner-detail-value">
+                                <?php echo date('g:i A', strtotime($active_booking_details['start_time'])); ?> - 
+                                <?php echo date('g:i A', strtotime($active_booking_details['end_time'])); ?>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="banner-detail">
+                        <i class="fas fa-door-closed"></i>
+                        <div>
+                            <div class="banner-detail-label">Room</div>
+                            <div class="banner-detail-value">
+                                <?php echo htmlspecialchars($active_booking_details['room_name'] ?? 'Room'); ?>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="banner-detail">
+                        <i class="fas fa-info-circle"></i>
+                        <div>
+                            <div class="banner-detail-label">Status</div>
+                            <div class="banner-detail-value">
+                                <?php echo ucfirst($active_booking_details['status'] ?? 'Pending'); ?>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <p style="color: rgba(255,255,255,0.8); margin-bottom: 20px; font-size: 15px;">
+                    <i class="fas fa-exclamation-triangle"></i> 
+                    <strong>Important:</strong> You can only book one room at a time. 
+                    Please wait until your current booking is completed before booking another room.
+                </p>
+                
+                <div class="banner-actions">
+                    <a href="booking-details.php?id=<?php echo $active_booking_details['b_id']; ?>" class="banner-btn banner-btn-primary">
+                        <i class="fas fa-eye"></i> View Booking Details
+                    </a>
+                    <a href="my-bookings.php" class="banner-btn banner-btn-secondary">
+                        <i class="fas fa-list"></i> View All Bookings
+                    </a>
+                </div>
+            </div>
+        <?php endif; ?>
+
         <!-- Navigation Tabs -->
         <div class="nav-tabs">
             <button class="nav-tab <?php echo $active_tab === 'rooms' ? 'active' : ''; ?>" onclick="switchTab('rooms')">
                 <i class="fas fa-door-closed"></i> Rooms
+                <?php if ($has_active_booking): ?>
+                    <span style="font-size: 12px; background: var(--warning); color: #333; padding: 2px 8px; border-radius: 10px; margin-left: 5px;">
+                        <i class="fas fa-exclamation"></i> Booking Restricted
+                    </span>
+                <?php endif; ?>
             </button>
             <button class="nav-tab <?php echo $active_tab === 'foods' ? 'active' : ''; ?>" onclick="switchTab('foods')">
-                <i class="fas fa-utensils"></i> Food & Drinks
+                <i class="fas fa-utensils"></i> Food & Drinks Menu
             </button>
         </div>
 
@@ -1354,14 +1461,34 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
                                 <span class="status-badge status-available">
                                     <i class="fas fa-circle"></i> Available
                                 </span>
-                                <button class="action-btn" onclick="showBookingModal(
-                                    <?php echo $room['r_id']; ?>,
-                                    '<?php echo htmlspecialchars($room['room_name'], ENT_QUOTES); ?>',
-                                    '<?php echo $room['capcity']; ?>',
-                                    '₹<?php echo number_format($room['price_hr'], 2); ?>'
-                                )">
-                                    <i class="fas fa-calendar-plus"></i> Book Room
-                                </button>
+                                
+                                <?php if ($has_active_booking): ?>
+                                    <!-- Show disabled booking button with message -->
+                                    <button class="booking-restricted-btn" onclick="showActiveBookingAlert()">
+                                        <i class="fas fa-exclamation-triangle"></i> Ongoing Booking
+                                    </button>
+                                    <p style="color: rgba(255,255,255,0.6); font-size: 13px; margin-top: 5px; text-align: center;">
+                                        <i class="fas fa-info-circle"></i> You have an active booking
+                                    </p>
+                                    <p style="color: rgba(253, 203, 110, 0.8); font-size: 12px; margin-top: 5px; text-align: center;">
+                                        <i class="fas fa-clock"></i> 
+                                        <?php echo date('F j', strtotime($active_booking_details['booking_date'])); ?> 
+                                        at <?php echo date('g:i A', strtotime($active_booking_details['start_time'])); ?>
+                                    </p>
+                                <?php else: ?>
+                                    <!-- Show normal booking button -->
+                                    <button class="action-btn" onclick="showBookingModal(
+                                        <?php echo $room['r_id']; ?>,
+                                        '<?php echo htmlspecialchars($room['room_name'], ENT_QUOTES); ?>',
+                                        '<?php echo $room['capcity']; ?>',
+                                        '₹<?php echo number_format($room['price_hr'], 2); ?>'
+                                    )">
+                                        <i class="fas fa-calendar-plus"></i> Book This Room
+                                    </button>
+                                    <p style="color: rgba(255,255,255,0.6); font-size: 13px; margin-top: 5px;">
+                                        <i class="fas fa-utensils"></i> Add food & drinks during booking
+                                    </p>
+                                <?php endif; ?>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -1383,6 +1510,12 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
             <div class="section-header">
                 <h2><i class="fas fa-utensils"></i> Food & Drinks Menu</h2>
                 <div class="section-count"><?php echo $foods_count; ?> Items</div>
+            </div>
+            
+            <div class="info-note" style="margin-bottom: 30px;">
+                <i class="fas fa-info-circle"></i>
+                <strong>Important:</strong> This is a view-only menu. To order food & drinks, you need to book a room first. 
+                You can add items to your order during the booking process.
             </div>
             
             <?php if ($foods_count > 0): ?>
@@ -1461,23 +1594,18 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
                                 <span class="status-badge status-<?php echo $stock_status; ?>">
                                     <i class="fas fa-circle"></i> <?php echo $stock_label; ?>
                                 </span>
-                                <button class="action-btn" onclick="showFoodOrderModal(
-                                    <?php echo $food['f_id']; ?>,
+                                <button class="view-btn" onclick="viewFoodDetails(
                                     '<?php echo htmlspecialchars($food['item_name'], ENT_QUOTES); ?>',
                                     '<?php echo $category; ?>',
                                     '₹<?php echo number_format($food['price'], 2); ?>',
                                     '<?php echo isset($food['stock']) ? $food['stock'] : ''; ?>',
                                     '<?php echo $stock_label; ?>'
-                                )" <?php echo ($stock_status == 'outofstock' || !$has_active_booking) ? 'disabled' : ''; ?>>
-                                    <i class="fas fa-shopping-cart"></i> 
-                                    <?php if ($stock_status == 'outofstock'): ?>
-                                        Out of Stock
-                                    <?php elseif (!$has_active_booking): ?>
-                                        Book Room First
-                                    <?php else: ?>
-                                        Order Now
-                                    <?php endif; ?>
+                                )">
+                                    <i class="fas fa-eye"></i> View Details
                                 </button>
+                                <p style="color: rgba(255,255,255,0.6); font-size: 13px; margin-top: 5px;">
+                                    <i class="fas fa-info-circle"></i> Add to order when booking a room
+                                </p>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -1499,9 +1627,6 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
 <script>
     // Store current item IDs for confirmation
     let currentRoomId = null;
-    let currentFoodId = null;
-    let currentFoodName = null;
-    let hasActiveBooking = <?php echo $has_active_booking ? 'true' : 'false'; ?>;
 
     function switchTab(tabName) {
         // Update URL without page reload
@@ -1517,8 +1642,12 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
             section.classList.remove('active');
         });
         
-        document.querySelector(`.nav-tab[onclick="switchTab('${tabName}')"]`).classList.add('active');
+        document.querySelector(`.nav-tab[onclick*="switchTab('${tabName}')"]`).classList.add('active');
         document.getElementById(`${tabName}-section`).classList.add('active');
+    }
+
+    function showActiveBookingAlert() {
+        alert('You already have an active booking. Please complete or cancel your current booking before booking another room.');
     }
 
     function showBookingModal(roomId, roomName, capacity, price) {
@@ -1535,17 +1664,8 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
         document.body.style.overflow = 'hidden';
     }
 
-    function showFoodOrderModal(foodId, foodName, category, price, stock, stockLabel) {
-        // Check if user has active booking
-        if (!hasActiveBooking) {
-            showBookingRequiredModal(foodName);
-            return;
-        }
-        
-        currentFoodId = foodId;
-        currentFoodName = foodName;
-        
-        // Update modal content
+    function viewFoodDetails(foodName, category, price, stock, stockLabel) {
+        // Update modal content for viewing only
         document.getElementById('modalFoodName').textContent = foodName;
         document.getElementById('modalFoodCategory').textContent = category;
         document.getElementById('modalFoodPrice').textContent = price;
@@ -1565,40 +1685,7 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
         }
         
         // Show modal
-        const modal = document.getElementById('foodOrderModal');
-        modal.style.display = 'block';
-        document.body.style.overflow = 'hidden';
-    }
-
-    function showBookingRequiredModal(foodName) {
-        // Show booking required modal
-        const modal = document.getElementById('bookingRequiredModal');
-        
-        // Update modal title with food name if available
-        const title = document.querySelector('.booking-required-title');
-        if (foodName) {
-            title.innerHTML = `Book a Room to Order "${foodName}"!`;
-        }
-        
-        modal.style.display = 'block';
-        document.body.style.overflow = 'hidden';
-    }
-
-    function showFoodOrderSuccessModal(foodName) {
-        // Update success modal content
-        document.getElementById('successFoodTitle').textContent = `Order for "${foodName}" Placed!`;
-        document.getElementById('successFoodMessage').innerHTML = `
-            Your order for <strong>${foodName}</strong> has been successfully recorded. 
-            <br><br>
-            Your food will be prepared and served during your booked KTV session.
-            <br><br>
-            <small style="color: #aaa; font-size: 14px;">
-                <i class="fas fa-info-circle"></i> You can view your orders in "My Bookings" section.
-            </small>
-        `;
-        
-        // Show success modal
-        const modal = document.getElementById('foodOrderSuccessModal');
+        const modal = document.getElementById('foodDetailsModal');
         modal.style.display = 'block';
         document.body.style.overflow = 'hidden';
     }
@@ -1614,39 +1701,9 @@ $user_bookings_count = $user_bookings_query->fetch_assoc()['count'];
             // Close modal
             closeModal('bookingModal');
             
-            // Redirect to booking page (if you have book-room.php)
-            // If not, show an alert instead
-            if (confirm("Redirect to booking page?")) {
-                window.location.href = 'book-room.php?room_id=' + currentRoomId;
-            }
+            // Redirect to booking page
+            window.location.href = 'book-room.php?room_id=' + currentRoomId;
         }
-    }
-
-    function processFoodOrder() {
-        if (currentFoodId && currentFoodName) {
-            // Close the order modal
-            closeModal('foodOrderModal');
-            
-            // Show processing message
-            setTimeout(() => {
-                showFoodOrderSuccessModal(currentFoodName);
-                
-                // You could add AJAX here to save the order to database
-                // For now, we'll just show the success message
-                
-            }, 500);
-        }
-    }
-
-    function redirectToRooms() {
-        // Close modal
-        closeModal('bookingRequiredModal');
-        
-        // Switch to rooms tab
-        switchTab('rooms');
-        
-        // Scroll to top of rooms section
-        document.getElementById('rooms-section').scrollIntoView({ behavior: 'smooth' });
     }
 
     function contactSupport() {

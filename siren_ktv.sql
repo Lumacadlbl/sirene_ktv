@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Feb 06, 2026 at 11:55 AM
+-- Generation Time: Feb 06, 2026 at 05:46 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -45,6 +45,13 @@ CREATE TABLE `booking` (
   `created_at` int(50) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+--
+-- Dumping data for table `booking`
+--
+
+INSERT INTO `booking` (`b_id`, `u_id`, `r_id`, `booking_date`, `start_time`, `end_time`, `hours`, `room_amount`, `food_amount`, `subtotal`, `tax_amount`, `total_amount`, `status`, `payment_status`, `created_at`) VALUES
+(14, 2, 7, '2026-02-07 00:00:00', '18:00:00', '20:00:00', 2, 240, 2400, 2640, 264, 2904, 'Approved', 'paid', 2147483647);
+
 -- --------------------------------------------------------
 
 --
@@ -58,6 +65,15 @@ CREATE TABLE `booking_food` (
   `quantity` int(11) NOT NULL,
   `price` int(11) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `booking_food`
+--
+
+INSERT INTO `booking_food` (`bf_id`, `b_id`, `f_id`, `quantity`, `price`) VALUES
+(7, 14, 50, 4, 320),
+(8, 14, 18, 2, 280),
+(9, 14, 22, 2, 280);
 
 -- --------------------------------------------------------
 
@@ -138,6 +154,13 @@ CREATE TABLE `payments` (
   `payment_date` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
+--
+-- Dumping data for table `payments`
+--
+
+INSERT INTO `payments` (`p_id`, `b_id`, `u_id`, `payment_method`, `payment_status`, `amount`, `payment_date`) VALUES
+(9, 14, 2, 'cash', 'completed', 2904.00, '2026-02-06 09:30:33');
+
 -- --------------------------------------------------------
 
 --
@@ -158,10 +181,8 @@ CREATE TABLE `room` (
 --
 
 INSERT INTO `room` (`r_id`, `room_name`, `capcity`, `price_hr`, `status`, `created_at`) VALUES
-(3, 'Room 2', 10, 225, 'Available', '2026-02-06 10:55:05'),
-(4, 'Room 4', 10, 120, 'Available', '2026-02-06 10:54:56'),
-(5, 'Room 6', 8, 100, 'Available', '2026-02-06 10:54:48'),
-(6, 'VIP', 6, 200, 'Available', '2026-02-06 10:54:37');
+(6, 'VIP', 6, 200, 'Available', '2026-02-06 10:54:37'),
+(7, 'Party room', 12, 120, 'Booked', '2026-02-06 16:30:06');
 
 -- --------------------------------------------------------
 
@@ -249,13 +270,13 @@ ALTER TABLE `user_tbl`
 -- AUTO_INCREMENT for table `booking`
 --
 ALTER TABLE `booking`
-  MODIFY `b_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
+  MODIFY `b_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
 
 --
 -- AUTO_INCREMENT for table `booking_food`
 --
 ALTER TABLE `booking_food`
-  MODIFY `bf_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `bf_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
 
 --
 -- AUTO_INCREMENT for table `extra_expense`
@@ -273,13 +294,13 @@ ALTER TABLE `food_beverages`
 -- AUTO_INCREMENT for table `payments`
 --
 ALTER TABLE `payments`
-  MODIFY `p_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `p_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
 
 --
 -- AUTO_INCREMENT for table `room`
 --
 ALTER TABLE `room`
-  MODIFY `r_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `r_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
 
 --
 -- AUTO_INCREMENT for table `user_tbl`

@@ -1,6 +1,7 @@
 <?php
 session_start();
 include "../db.php";
+
 // Add these cache control headers
 header("Cache-Control: no-cache, no-store, must-revalidate");
 header("Pragma: no-cache");
@@ -23,13 +24,15 @@ if ($booking_id == 0) {
     exit;
 }
 
-// Fetch booking details for receipt
+// Fetch booking details with payment info
 $booking_query = $conn->prepare("
     SELECT b.*, r.room_name, r.price_hr, r.capcity,
-           u.name as customer_name, u.email as customer_email, u.contact as customer_phone
+           u.name as customer_name, u.email as customer_email, u.contact as customer_phone,
+           p.payment_status, p.amount as payment_amount, p.payment_method, p.payment_date
     FROM booking b
     LEFT JOIN room r ON b.r_id = r.r_id
     LEFT JOIN user_tbl u ON b.u_id = u.id
+    LEFT JOIN payments p ON b.b_id = p.b_id
     WHERE b.b_id = ? AND (b.u_id = ? OR ? = 'admin')
 ");
 $booking_query->bind_param("iii", $booking_id, $user_id, $role);
@@ -50,13 +53,8 @@ $total_hours = 1;
 
 try {
     if (isset($booking['start_time']) && isset($booking['end_time'])) {
-        if (strlen($booking['start_time']) > 8) {
-            $start_time = new DateTime($booking['start_time']);
-            $end_time = new DateTime($booking['end_time']);
-        } else {
-            $start_time = new DateTime($booking['booking_date'] . ' ' . $booking['start_time']);
-            $end_time = new DateTime($booking['booking_date'] . ' ' . $booking['end_time']);
-        }
+        $start_time = new DateTime($booking['booking_date'] . ' ' . $booking['start_time']);
+        $end_time = new DateTime($booking['booking_date'] . ' ' . $booking['end_time']);
         
         if ($start_time && $end_time) {
             $interval = $start_time->diff($end_time);
@@ -69,71 +67,92 @@ try {
     $total_hours = 1;
 }
 
-// Calculate costs
+// Calculate room cost
 $room_cost = $total_hours * ($booking['price_hr'] ?? 0);
-$food_cost = $booking['food_total'] ?? 0;
-$total_cost = $room_cost + $food_cost;
-$deposit_amount = $booking['deposit_amount'] ?? 0;
-$balance_due = $total_cost - $deposit_amount;
 
-// Fetch food items for this booking
+// Fetch food items for this booking from booking_food table
 $food_items = [];
-if (isset($booking['food_items']) && !empty($booking['food_items'])) {
-    $food_ids = explode(',', $booking['food_items']);
-    $food_quantities = isset($booking['food_quantities']) ? explode(',', $booking['food_quantities']) : [];
-    
-    if (!empty($food_ids)) {
-        $food_ids = array_map('intval', $food_ids);
-        $food_ids_str = implode(',', $food_ids);
-        $food_query = $conn->query("SELECT * FROM food_beverages WHERE f_id IN ($food_ids_str)");
-        if ($food_query) {
-            while ($food = $food_query->fetch_assoc()) {
-                $key = array_search($food['f_id'], $food_ids);
-                $quantity = ($key !== false && isset($food_quantities[$key])) ? 
-                            intval($food_quantities[$key]) : 1;
-                $food['quantity'] = $quantity;
-                $food['subtotal'] = ($food['price'] ?? 0) * $quantity;
-                $food_items[] = $food;
-            }
-        }
+$food_cost = 0;
+
+$food_query = $conn->prepare("
+    SELECT bf.*, fb.item_name, fb.category, fb.price 
+    FROM booking_food bf
+    LEFT JOIN food_beverages fb ON bf.f_id = fb.f_id
+    WHERE bf.b_id = ?
+");
+$food_query->bind_param("i", $booking_id);
+$food_query->execute();
+$food_result = $food_query->get_result();
+
+if ($food_result && $food_result->num_rows > 0) {
+    while ($food = $food_result->fetch_assoc()) {
+        $food['subtotal'] = ($food['price'] ?? 0) * ($food['quantity'] ?? 1);
+        $food_cost += $food['subtotal'];
+        $food_items[] = $food;
     }
+}
+
+// Calculate total cost - Use database values if they exist, otherwise calculate
+if (isset($booking['total_amount']) && $booking['total_amount'] > 0) {
+    // If database has total_amount, use it
+    $total_cost = floatval($booking['total_amount']) / 1.18; // Remove tax to get subtotal
+    $room_cost = floatval($booking['room_amount'] ?? $room_cost);
+    $food_cost = floatval($booking['food_amount'] ?? $food_cost);
+} else {
+    // Calculate from scratch
+    $total_cost = $room_cost + $food_cost;
+}
+
+// Get payment amount from payments table or booking table
+$deposit_amount = 0;
+if (isset($booking['payment_amount']) && $booking['payment_amount'] > 0) {
+    $deposit_amount = floatval($booking['payment_amount']);
+} elseif (isset($booking['deposit_amount'])) {
+    $deposit_amount = floatval($booking['deposit_amount']);
+}
+
+// Calculate taxes and totals (18% tax)
+$tax_rate = 0.18;
+$tax_amount = $total_cost * $tax_rate;
+$grand_total = $total_cost + $tax_amount;
+$balance_due = $grand_total - $deposit_amount;
+
+// Determine payment status
+$payment_status = 'Pending';
+$payment_status_class = 'pending';
+
+// Check payment status from payments table
+if (isset($booking['payment_status'])) {
+    $status_lower = strtolower($booking['payment_status']);
+    if (in_array($status_lower, ['paid', 'completed', 'approved', 'success'])) {
+        $payment_status = 'Paid';
+        $payment_status_class = 'paid';
+    } elseif ($status_lower == 'partial') {
+        $payment_status = 'Partial';
+        $payment_status_class = 'partial';
+    }
+}
+// Check if deposit covers full amount
+elseif ($deposit_amount >= $grand_total) {
+    $payment_status = 'Paid';
+    $payment_status_class = 'paid';
+} elseif ($deposit_amount > 0) {
+    $payment_status = 'Partial';
+    $payment_status_class = 'partial';
 }
 
 // Format dates and times
 $booking_date = isset($booking['booking_date']) ? date('F d, Y', strtotime($booking['booking_date'])) : 'Not set';
-$start_time_formatted = 'Not set';
-$end_time_formatted = 'Not set';
-
-try {
-    if (isset($booking['start_time'])) {
-        if (strlen($booking['start_time']) > 8) {
-            $start_time_formatted = date('g:i A', strtotime($booking['start_time']));
-        } else {
-            $start_time_formatted = date('g:i A', strtotime($booking['start_time']));
-        }
-    }
-    
-    if (isset($booking['end_time'])) {
-        if (strlen($booking['end_time']) > 8) {
-            $end_time_formatted = date('g:i A', strtotime($booking['end_time']));
-        } else {
-            $end_time_formatted = date('g:i A', strtotime($booking['end_time']));
-        }
-    }
-} catch (Exception $e) {
-    error_log("Time formatting error: " . $e->getMessage());
-}
-
-// Calculate taxes and totals
-$tax_rate = 0.18; // 18% tax
-$tax_amount = $total_cost * $tax_rate;
-$grand_total = $total_cost + $tax_amount;
-$balance_due_with_tax = $grand_total - $deposit_amount;
+$start_time_formatted = isset($booking['start_time']) ? date('g:i A', strtotime($booking['start_time'])) : 'Not set';
+$end_time_formatted = isset($booking['end_time']) ? date('g:i A', strtotime($booking['end_time'])) : 'Not set';
 
 // Receipt details
 $receipt_number = 'REC-' . str_pad($booking_id, 6, '0', STR_PAD_LEFT);
 $issue_date = date('F d, Y');
 $issue_time = date('g:i A');
+
+// Use booking date for receipt
+$receipt_date = $booking_date;
 ?>
 
 <!DOCTYPE html>
@@ -588,74 +607,7 @@ $issue_time = date('g:i A');
             font-style: italic;
         }
 
-        /* Print styles */
-        @media print {
-            body {
-                background: white !important;
-                color: black !important;
-                padding: 0 !important;
-                margin: 0 !important;
-            }
-
-            header, footer, .back-btn, .user-info, .watermark {
-                display: none !important;
-            }
-
-            .receipt-container {
-                max-width: 100% !important;
-                margin: 0 !important;
-                box-shadow: none !important;
-                border: none !important;
-                background: white !important;
-            }
-
-            .receipt-header {
-                background: white !important;
-                border-bottom: 2px solid black !important;
-            }
-
-            .receipt-logo h2 {
-                color: black !important;
-            }
-
-            .receipt-title {
-                background: #333 !important;
-                color: white !important;
-            }
-
-            .info-label, .footer-label {
-                color: #666 !important;
-            }
-
-            .info-value, .footer-value, .section-title, .cost-label, .cost-value {
-                color: black !important;
-            }
-
-            .items-table th {
-                background: #333 !important;
-                color: white !important;
-            }
-
-            .items-table td {
-                color: black !important;
-            }
-
-            .customer-details, .room-details, .cost-summary, .special-notes {
-                background: #f5f5f5 !important;
-                border: 1px solid #ddd !important;
-            }
-
-            .terms {
-                background: #f5f5f5 !important;
-                border: 1px solid #ddd !important;
-                color: #666 !important;
-            }
-
-            @page {
-                margin: 20mm;
-            }
-        }
-
+        /* Print styles removed */
         @media (max-width: 768px) {
             header {
                 padding: 15px 20px;
@@ -722,8 +674,8 @@ $issue_time = date('g:i A');
                 <?php echo htmlspecialchars($name); ?> (<?php echo ucfirst($role); ?>)
             </div>
             
-            <a href="booking-details.php?id=<?php echo $booking_id; ?>" class="back-btn">
-                <i class="fas fa-arrow-left"></i> Back to Booking
+            <a href="my-bookings.php?id=<?php echo $booking_id; ?>" class="back-btn">
+                <i class="fas fa-arrow-left"></i> Back to My Bookings
             </a>
         </div>
     </header>
@@ -758,7 +710,7 @@ $issue_time = date('g:i A');
                 </div>
                 <div class="info-item">
                     <span class="info-label">Issue Date</span>
-                    <span class="info-value"><?php echo $issue_date; ?></span>
+                    <span class="info-value"><?php echo $receipt_date; ?></span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Issue Time</span>
@@ -767,8 +719,8 @@ $issue_time = date('g:i A');
                 <div class="info-item">
                     <span class="info-label">Payment Status</span>
                     <span class="info-value">
-                        <span class="payment-status status-<?php echo strtolower($deposit_amount >= $grand_total ? 'paid' : ($deposit_amount > 0 ? 'partial' : 'pending')); ?>">
-                            <?php echo $deposit_amount >= $grand_total ? 'PAID' : ($deposit_amount > 0 ? 'PARTIAL' : 'PENDING'); ?>
+                        <span class="payment-status status-<?php echo $payment_status_class; ?>">
+                            <?php echo $payment_status; ?>
                         </span>
                     </span>
                 </div>
@@ -870,6 +822,14 @@ $issue_time = date('g:i A');
                             <td class="text-right">₹<?php echo number_format($food['subtotal'], 2); ?></td>
                         </tr>
                         <?php endforeach; ?>
+                        <?php if (count($food_items) > 0): ?>
+                        <tr style="background: rgba(233, 69, 96, 0.1);">
+                            <td colspan="4" style="text-align: right; font-weight: 600;">Food & Beverages Total:</td>
+                            <td class="text-right" style="font-weight: 700; color: var(--highlight);">
+                                ₹<?php echo number_format($food_cost, 2); ?>
+                            </td>
+                        </tr>
+                        <?php endif; ?>
                     </tbody>
                 </table>
             </div>
@@ -897,23 +857,23 @@ $issue_time = date('g:i A');
                     </div>
                     
                     <div class="cost-row">
-                        <span class="cost-label">Tax (GST 18%)</span>
+                        <span class="cost-label">Taxes & Service Charges (18%)</span>
                         <span class="cost-value">₹<?php echo number_format($tax_amount, 2); ?></span>
                     </div>
                     
                     <div class="cost-row total">
-                        <span class="cost-label">Grand Total</span>
+                        <span class="cost-label">Total Amount</span>
                         <span class="cost-value">₹<?php echo number_format($grand_total, 2); ?></span>
                     </div>
                     
                     <div class="cost-row">
-                        <span class="cost-label">Deposit Paid</span>
+                        <span class="cost-label">Amount Paid</span>
                         <span class="cost-value">₹<?php echo number_format($deposit_amount, 2); ?></span>
                     </div>
                     
                     <div class="cost-row total">
                         <span class="cost-label">Balance Due</span>
-                        <span class="cost-value">₹<?php echo number_format($balance_due_with_tax, 2); ?></span>
+                        <span class="cost-value">₹<?php echo number_format($balance_due, 2); ?></span>
                     </div>
                 </div>
             </div>
@@ -924,11 +884,7 @@ $issue_time = date('g:i A');
                 <div class="info-grid">
                     <div class="info-item">
                         <span class="info-label">Payment Method</span>
-                        <span class="info-value"><?php echo $booking['payment_method'] ?? 'Cash / Card'; ?></span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Transaction ID</span>
-                        <span class="info-value"><?php echo $booking['transaction_id'] ?? 'Not provided'; ?></span>
+                        <span class="info-value"><?php echo !empty($booking['payment_method']) ? ucfirst($booking['payment_method']) : 'Cash / Card'; ?></span>
                     </div>
                     <div class="info-item">
                         <span class="info-label">Payment Date</span>
@@ -988,15 +944,6 @@ $issue_time = date('g:i A');
     </div>
 
     <script>
-        // Add receipt number to page title when printing
-        const originalTitle = document.title;
-        window.addEventListener('beforeprint', () => {
-            document.title = 'Receipt_<?php echo $receipt_number; ?>_Sirene_KTV';
-        });
-        window.addEventListener('afterprint', () => {
-            document.title = originalTitle;
-        });
-
         // Add watermark effect
         document.addEventListener('DOMContentLoaded', function() {
             const watermark = document.querySelector('.watermark');

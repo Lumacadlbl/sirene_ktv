@@ -26,6 +26,63 @@ if (!$room) {
 $foods_query = $conn->query("SELECT * FROM food_beverages WHERE stock > 0 ORDER BY category, item_name");
 $foods = $foods_query->fetch_all(MYSQLI_ASSOC);
 
+// Food image mapping - SAME AS DASHBOARD
+$food_images = [
+    // Appetizers
+    'Cheese Balls' => '../images/cheese-balls.jpg',
+    'Chicken Lollipop' => '../images/chicken-lollipop.jpg',
+    'Chicken Wings' => '../images/chicken-wings.jpg',
+    'Paneer Tikka' => '../images/paneer-tikka.jpg',
+    'Spring Rolls (Veg)' => '../images/spring-rolls.jpg',
+    
+    // Main Course
+    'Chicken Biryani' => '../images/chicken-biryani.jpg',
+    'Fish & Chips' => '../images/fish-chips.jpg',
+    'Paneer Butter Masala' => '../images/paneer-butter-masala.jpg',
+    'Veg Hakka Noodles' => '../images/veg-hakka-noodles.jpg',
+    
+    // Snacks
+    'Chicken Burger' => '../images/chicken-burger.jpg',
+    'Chicken Hot Dog' => '../images/chicken-hotdog.jpg',
+    'Chicken Wrap' => '../images/chicken-wrap.jpg',
+    'Masala Fries' => '../images/masala-fries.jpg',
+    'Nachos with Cheese' => '../images/nachos-cheese.jpg',
+    
+    // Beverages
+    'Coca-Cola (500ml)' => '../images/coca-cola.jpg',
+    'Fresh Lime Soda' => '../images/fresh-lime-soda.jpg',
+    'Hot Coffee' => '../images/hot-coffee.jpg',
+    'Iced Tea' => '../images/iced-tea.jpg',
+    'Virgin Mojito' => '../images/virgin-mojito.jpg',
+    
+    // Alcoholic Drinks
+    'Brandy (60ml)' => '../images/brandy.jpg',
+    'Champagne (Glass)' => '../images/champagne.jpg',
+    'Gin (60ml)' => '../images/gin.jpg',
+    'Tequila Shot' => '../images/tequila.jpg',
+    'Whisky (60ml)' => '../images/whisky.jpg',
+    
+    // Desserts
+    'Cheesecake Slice' => '../images/cheesecake.jpg',
+    'Chocolate Mousse' => '../images/chocolate-mousse.jpg',
+    'Fruit Salad' => '../images/fruit-salad.jpg',
+    'Gulab Jamun' => '../images/gulab-jamun.jpg',
+    'Ice Cream Sundae' => '../images/ice-cream-sundae.jpg'
+];
+
+// Default image if not found
+$default_food_image = '../images/food/default.jpg';
+
+// Group foods by category
+$foods_by_category = [];
+foreach ($foods as $food) {
+    $category = $food['category'];
+    if (!isset($foods_by_category[$category])) {
+        $foods_by_category[$category] = [];
+    }
+    $foods_by_category[$category][] = $food;
+}
+
 // Handle form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $booking_date = $_POST['booking_date'];
@@ -302,47 +359,176 @@ $default_date = date('Y-m-d', strtotime('+1 day'));
             border-top: 1px solid rgba(255, 255, 255, 0.1);
         }
         
+        /* NEW: Food Category Tabs */
+        .food-category-tabs {
+            display: flex;
+            overflow-x: auto;
+            gap: 10px;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+        }
+        
+        .food-tab {
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            color: rgba(255, 255, 255, 0.7);
+            cursor: pointer;
+            white-space: nowrap;
+            transition: all 0.3s;
+        }
+        
+        .food-tab:hover {
+            background: rgba(233, 69, 96, 0.1);
+            color: var(--highlight);
+        }
+        
+        .food-tab.active {
+            background: var(--highlight);
+            color: white;
+            border-color: var(--highlight);
+        }
+        
+        /* NEW: Food Grid with Images */
+        .food-category-content {
+            display: none;
+        }
+        
+        .food-category-content.active {
+            display: block;
+        }
+        
         .food-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 15px;
-            max-height: 300px;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+            max-height: 400px;
             overflow-y: auto;
             padding: 10px;
         }
         
-        .food-item {
+        .food-item-card {
             background: rgba(255, 255, 255, 0.05);
-            padding: 15px;
             border-radius: 10px;
+            overflow: hidden;
             border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s;
         }
         
-        .food-name {
+        .food-item-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--highlight);
+            box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+        }
+        
+        .food-image-container {
+            position: relative;
+            height: 150px;
+            overflow: hidden;
+            background: rgba(255, 255, 255, 0.05);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .food-image {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            transition: transform 0.5s;
+        }
+        
+        .food-item-card:hover .food-image {
+            transform: scale(1.1);
+        }
+        
+        .no-image-icon {
+            font-size: 40px;
+            color: rgba(255, 255, 255, 0.1);
+        }
+        
+        .food-overlay {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(233, 69, 96, 0.9);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 15px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+        
+        .food-card-content {
+            padding: 15px;
+        }
+        
+        .food-card-name {
             font-weight: bold;
             color: var(--light);
             margin-bottom: 5px;
+            font-size: 16px;
         }
         
-        .food-price {
+        .food-card-price {
             color: var(--highlight);
-            font-size: 14px;
-            margin-bottom: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 15px;
         }
         
-        .food-qty {
+        .food-card-stock {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.6);
+            margin-bottom: 10px;
             display: flex;
             align-items: center;
+            gap: 5px;
+        }
+        
+        .food-card-stock i {
+            color: var(--success);
+        }
+        
+        .food-qty-controls {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
             gap: 10px;
         }
         
-        .food-qty input {
-            width: 60px;
-            padding: 5px;
+        .food-qty-input {
+            width: 80px;
+            padding: 8px;
             text-align: center;
             background: rgba(255, 255, 255, 0.1);
             border: 1px solid rgba(255, 255, 255, 0.2);
             border-radius: 5px;
+            color: white;
+        }
+        
+        .food-qty-buttons {
+            display: flex;
+            gap: 5px;
+        }
+        
+        .qty-btn {
+            width: 30px;
+            height: 30px;
+            background: rgba(233, 69, 96, 0.2);
+            border: none;
+            border-radius: 5px;
+            color: var(--highlight);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+        
+        .qty-btn:hover {
+            background: var(--highlight);
             color: white;
         }
         
@@ -361,6 +547,10 @@ $default_date = date('Y-m-d', strtotime('+1 day'));
             .summary {
                 grid-column: 1;
                 grid-row: auto;
+            }
+            
+            .food-grid {
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
             }
         }
         
@@ -440,6 +630,28 @@ $default_date = date('Y-m-d', strtotime('+1 day'));
             font-weight: bold;
             color: var(--highlight);
         }
+        
+        .category-title {
+            color: var(--highlight);
+            margin: 20px 0 15px 0;
+            font-size: 18px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .no-food-message {
+            text-align: center;
+            padding: 40px 20px;
+            color: rgba(255, 255, 255, 0.5);
+            grid-column: 1 / -1;
+        }
+        
+        .no-food-message i {
+            font-size: 50px;
+            margin-bottom: 15px;
+            color: rgba(255, 255, 255, 0.2);
+        }
     </style>
 </head>
 <body>
@@ -450,7 +662,7 @@ $default_date = date('Y-m-d', strtotime('+1 day'));
 
 <div class="header">
     <h1><i class="fas fa-calendar-plus"></i> Book Your KTV Room</h1>
-    <p>Complete your booking details below</p>
+    <p>Complete your booking details below - Add food & drinks during booking</p>
 </div>
 
 <?php if (isset($error)): ?>
@@ -483,7 +695,7 @@ $default_date = date('Y-m-d', strtotime('+1 day'));
             </div>
         </div>
         <p style="color: rgba(255, 255, 255, 0.7); line-height: 1.6;">
-            Book this room for your karaoke session. You can add food and drinks to your order below.
+            <i class="fas fa-info-circle"></i> Add food and drinks to your booking below. All items will be served during your KTV session.
         </p>
     </div>
 
@@ -517,30 +729,96 @@ $default_date = date('Y-m-d', strtotime('+1 day'));
             </div>
             
             <div class="food-section">
-                <h3><i class="fas fa-utensils"></i> Add Food & Drinks</h3>
+                <h3><i class="fas fa-utensils"></i> Add Food & Drinks (Optional)</h3>
                 <p style="color: rgba(255, 255, 255, 0.6); margin-bottom: 15px; font-size: 14px;">
-                    Select items to add to your booking (optional)
+                    Browse our menu and add items to your booking. Prices include tax.
                 </p>
-                <?php if (!empty($foods)): ?>
-                    <div class="food-grid">
-                        <?php foreach ($foods as $food): ?>
-                            <div class="food-item">
-                                <div class="food-name"><?php echo htmlspecialchars($food['item_name']); ?></div>
-                                <div class="food-price">₹<?php echo number_format($food['price'], 2); ?></div>
-                                <div class="food-qty">
-                                    <label for="food_<?php echo $food['f_id']; ?>">Qty:</label>
-                                    <input type="number" id="food_<?php echo $food['f_id']; ?>" 
-                                           name="food_items[<?php echo $food['f_id']; ?>]" 
-                                           min="0" max="10" value="0"
-                                           onchange="updateSummary()">
-                                </div>
-                            </div>
+                
+                <?php if (!empty($foods_by_category)): ?>
+                    <!-- Food Category Tabs -->
+                    <div class="food-category-tabs">
+                        <?php foreach (array_keys($foods_by_category) as $index => $category): ?>
+                            <button type="button" class="food-tab <?php echo $index === 0 ? 'active' : ''; ?>" 
+                                    onclick="switchFoodTab('<?php echo $category; ?>')">
+                                <?php echo $category; ?>
+                            </button>
                         <?php endforeach; ?>
                     </div>
+                    
+                    <!-- Food Categories Content -->
+                    <?php foreach ($foods_by_category as $category => $category_foods): ?>
+                        <div id="food-category-<?php echo strtolower(str_replace(' ', '-', $category)); ?>" 
+                             class="food-category-content <?php echo $category === array_key_first($foods_by_category) ? 'active' : ''; ?>">
+                            <h4 class="category-title">
+                                <i class="fas fa-tag"></i> <?php echo $category; ?>
+                            </h4>
+                            <div class="food-grid">
+                                <?php foreach ($category_foods as $food): 
+                                    // Get image URL
+                                    $food_image = isset($food_images[$food['item_name']]) ? $food_images[$food['item_name']] : $default_food_image;
+                                ?>
+                                    <div class="food-item-card">
+                                        <div class="food-image-container">
+                                            <?php 
+                                            // Check if image file exists
+                                            $image_path = dirname(__FILE__) . '/' . $food_image;
+                                            if (file_exists($image_path)): 
+                                            ?>
+                                                <img src="<?php echo $food_image; ?>" 
+                                                     alt="<?php echo htmlspecialchars($food['item_name']); ?>" 
+                                                     class="food-image" 
+                                                     loading="lazy"
+                                                     onerror="this.onerror=null; this.parentElement.innerHTML='<i class=\"fas fa-image no-image-icon\"></i>';">
+                                            <?php else: ?>
+                                                <i class="fas fa-image no-image-icon"></i>
+                                            <?php endif; ?>
+                                            <div class="food-overlay">
+                                                <?php echo $category; ?>
+                                            </div>
+                                        </div>
+                                        
+                                        <div class="food-card-content">
+                                            <div class="food-card-name"><?php echo htmlspecialchars($food['item_name']); ?></div>
+                                            <div class="food-card-price">₹<?php echo number_format($food['price'], 2); ?></div>
+                                            
+                                            <?php if (isset($food['stock'])): ?>
+                                                <div class="food-card-stock">
+                                                    <i class="fas fa-box"></i> 
+                                                    <?php echo $food['stock']; ?> in stock
+                                                </div>
+                                            <?php endif; ?>
+                                            
+                                            <div class="food-qty-controls">
+                                                <input type="number" 
+                                                       id="food_<?php echo $food['f_id']; ?>" 
+                                                       name="food_items[<?php echo $food['f_id']; ?>]" 
+                                                       min="0" max="10" value="0"
+                                                       class="food-qty-input"
+                                                       onchange="updateSummary()">
+                                                
+                                                <div class="food-qty-buttons">
+                                                    <button type="button" class="qty-btn" 
+                                                            onclick="changeQty(<?php echo $food['f_id']; ?>, -1)">
+                                                        <i class="fas fa-minus"></i>
+                                                    </button>
+                                                    <button type="button" class="qty-btn" 
+                                                            onclick="changeQty(<?php echo $food['f_id']; ?>, 1)">
+                                                        <i class="fas fa-plus"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
                 <?php else: ?>
-                    <p style="color: rgba(255, 255, 255, 0.5); text-align: center; padding: 20px;">
-                        No food items available at the moment.
-                    </p>
+                    <div class="no-food-message">
+                        <i class="fas fa-utensils"></i>
+                        <h3>Menu Currently Unavailable</h3>
+                        <p>No food items are available at the moment. You can still book the room.</p>
+                    </div>
                 <?php endif; ?>
             </div>
             
@@ -551,7 +829,7 @@ $default_date = date('Y-m-d', strtotime('+1 day'));
             </div>
             
             <button type="submit" class="book-btn" id="submitBtn">
-                <i class="fas fa-lock"></i> Proceed to Payment
+                <i class="fas fa-lock"></i> Confirm Booking
             </button>
         </form>
     </div>
@@ -559,7 +837,7 @@ $default_date = date('Y-m-d', strtotime('+1 day'));
     <div class="summary">
         <h2><i class="fas fa-receipt"></i> Booking Summary</h2>
         <div class="summary-item">
-            <span>Room (2 hours)</span>
+            <span>Room (<span id="summaryHours">2.0</span> hours)</span>
             <span>₹<span id="roomPrice"><?php echo number_format($room['price_hr'] * 2, 2); ?></span></span>
         </div>
         <div class="summary-item">
@@ -594,6 +872,40 @@ $default_date = date('Y-m-d', strtotime('+1 day'));
     const roomPricePerHour = <?php echo $room['price_hr']; ?>;
     const foodPrices = <?php echo json_encode(array_column($foods, 'price', 'f_id')); ?>;
     
+    function switchFoodTab(category) {
+        // Update tabs
+        document.querySelectorAll('.food-tab').forEach(tab => {
+            tab.classList.remove('active');
+        });
+        document.querySelectorAll('.food-category-content').forEach(content => {
+            content.classList.remove('active');
+        });
+        
+        // Activate selected tab
+        const tabButton = Array.from(document.querySelectorAll('.food-tab')).find(
+            tab => tab.textContent === category
+        );
+        if (tabButton) tabButton.classList.add('active');
+        
+        const contentDiv = document.getElementById(`food-category-${category.toLowerCase().replace(' ', '-')}`);
+        if (contentDiv) contentDiv.classList.add('active');
+    }
+    
+    function changeQty(foodId, delta) {
+        const input = document.getElementById(`food_${foodId}`);
+        let currentQty = parseInt(input.value) || 0;
+        let newQty = currentQty + delta;
+        
+        if (newQty >= 0 && newQty <= 10) {
+            input.value = newQty;
+            updateSummary();
+            
+            // Add visual feedback
+            input.style.backgroundColor = newQty > 0 ? 'rgba(233, 69, 96, 0.2)' : '';
+            input.style.borderColor = newQty > 0 ? 'var(--highlight)' : '';
+        }
+    }
+    
     function calculateHours() {
         const date = document.getElementById('booking_date').value;
         const startTime = document.getElementById('start_time').value;
@@ -610,6 +922,7 @@ $default_date = date('Y-m-d', strtotime('+1 day'));
             
             const hours = (end - start) / (1000 * 60 * 60);
             document.getElementById('hoursDisplay').textContent = `Duration: ${hours.toFixed(1)} hours`;
+            document.getElementById('summaryHours').textContent = hours.toFixed(1);
             updateSummary();
         }
     }
