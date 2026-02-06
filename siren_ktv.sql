@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Jan 30, 2026 at 12:00 PM
+-- Generation Time: Feb 06, 2026 at 11:55 AM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -45,15 +45,6 @@ CREATE TABLE `booking` (
   `created_at` int(50) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
---
--- Dumping data for table `booking`
---
-
-INSERT INTO `booking` (`b_id`, `u_id`, `r_id`, `booking_date`, `start_time`, `end_time`, `hours`, `room_amount`, `food_amount`, `subtotal`, `tax_amount`, `total_amount`, `status`, `payment_status`, `created_at`) VALUES
-(1, 2, 1, '2026-01-30 00:00:00', '18:00:00', '20:00:00', 2, 200, 0, 200, 20, 220, 'Cancelled', 'pending', 2147483647),
-(2, 2, 2, '2026-01-31 00:00:00', '18:00:00', '20:00:00', 2, 350, 0, 350, 35, 385, 'Cancelled', 'pending', 2147483647),
-(6, 2, 3, '2026-01-31 00:00:00', '18:00:00', '23:00:00', 5, 1125, 40, 1165, 117, 1282, 'Approved', 'paid', 2147483647);
-
 -- --------------------------------------------------------
 
 --
@@ -67,13 +58,6 @@ CREATE TABLE `booking_food` (
   `quantity` int(11) NOT NULL,
   `price` int(11) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
---
--- Dumping data for table `booking_food`
---
-
-INSERT INTO `booking_food` (`bf_id`, `b_id`, `f_id`, `quantity`, `price`) VALUES
-(2, 6, 1, 4, 10);
 
 -- --------------------------------------------------------
 
@@ -96,11 +80,11 @@ CREATE TABLE `extra_expense` (
 
 CREATE TABLE `food_beverages` (
   `f_id` int(11) NOT NULL,
-  `item_name` varchar(100) NOT NULL,
-  `category` varchar(100) NOT NULL,
-  `price` decimal(10,0) NOT NULL,
-  `stock` int(50) NOT NULL,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
+  `item_name` varchar(255) NOT NULL,
+  `category` varchar(50) NOT NULL,
+  `price` decimal(10,2) NOT NULL,
+  `stock` int(11) NOT NULL DEFAULT 0,
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
@@ -108,7 +92,35 @@ CREATE TABLE `food_beverages` (
 --
 
 INSERT INTO `food_beverages` (`f_id`, `item_name`, `category`, `price`, `stock`, `created_at`) VALUES
-(1, 'Popcorn', 'Snacks', 10, 100, '2026-01-30 02:51:35');
+(4, 'Spring Rolls (Veg)', 'Appetizer', 220.00, 40, '2026-02-06 08:09:40'),
+(5, 'Cheese Balls', 'Appetizer', 200.00, 45, '2026-02-06 08:09:40'),
+(7, 'Chicken Wings', 'Appetizer', 320.00, 35, '2026-02-06 08:09:40'),
+(8, 'Paneer Tikka', 'Appetizer', 280.00, 40, '2026-02-06 08:09:40'),
+(10, 'Chicken Lollipop', 'Appetizer', 300.00, 30, '2026-02-06 08:09:40'),
+(12, 'Chicken Biryani', 'Main Course', 350.00, 30, '2026-02-06 08:09:40'),
+(14, 'Paneer Butter Masala', 'Main Course', 320.00, 35, '2026-02-06 08:09:40'),
+(15, 'Fish & Chips', 'Main Course', 400.00, 20, '2026-02-06 08:09:40'),
+(18, 'Veg Hakka Noodles', 'Main Course', 280.00, 40, '2026-02-06 08:09:40'),
+(22, 'Chicken Burger', 'Snacks', 280.00, 40, '2026-02-06 08:09:40'),
+(25, 'Nachos with Cheese', 'Snacks', 300.00, 30, '2026-02-06 08:09:40'),
+(27, 'Chicken Wrap', 'Snacks', 260.00, 35, '2026-02-06 08:09:40'),
+(29, 'Masala Fries', 'Snacks', 210.00, 40, '2026-02-06 08:09:40'),
+(31, 'Chicken Hot Dog', 'Snacks', 220.00, 40, '2026-02-06 08:09:40'),
+(32, 'Coca-Cola (500ml)', 'Beverage', 80.00, 100, '2026-02-06 08:09:40'),
+(33, 'Fresh Lime Soda', 'Beverage', 100.00, 80, '2026-02-06 08:09:40'),
+(34, 'Iced Tea', 'Beverage', 120.00, 70, '2026-02-06 08:09:40'),
+(35, 'Virgin Mojito', 'Beverage', 150.00, 60, '2026-02-06 08:09:40'),
+(36, 'Hot Coffee', 'Beverage', 90.00, 90, '2026-02-06 08:09:40'),
+(43, 'Whisky (60ml)', 'Alcoholic', 350.00, 60, '2026-02-06 08:09:40'),
+(47, 'Tequila Shot', 'Alcoholic', 200.00, 70, '2026-02-06 08:09:40'),
+(49, 'Gin (60ml)', 'Alcoholic', 340.00, 50, '2026-02-06 08:09:40'),
+(50, 'Brandy (60ml)', 'Alcoholic', 320.00, 45, '2026-02-06 08:09:40'),
+(51, 'Champagne (Glass)', 'Alcoholic', 400.00, 30, '2026-02-06 08:09:40'),
+(53, 'Ice Cream Sundae', 'Dessert', 220.00, 35, '2026-02-06 08:09:40'),
+(54, 'Cheesecake Slice', 'Dessert', 250.00, 30, '2026-02-06 08:09:40'),
+(55, 'Chocolate Mousse', 'Dessert', 200.00, 45, '2026-02-06 08:09:40'),
+(56, 'Fruit Salad', 'Dessert', 150.00, 50, '2026-02-06 08:09:40'),
+(57, 'Gulab Jamun', 'Dessert', 120.00, 60, '2026-02-06 08:09:40');
 
 -- --------------------------------------------------------
 
@@ -125,13 +137,6 @@ CREATE TABLE `payments` (
   `amount` decimal(10,2) NOT NULL,
   `payment_date` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
---
--- Dumping data for table `payments`
---
-
-INSERT INTO `payments` (`p_id`, `b_id`, `u_id`, `payment_method`, `payment_status`, `amount`, `payment_date`) VALUES
-(1, 6, 2, 'card', 'approved', 1282.00, '2026-01-30 10:47:48');
 
 -- --------------------------------------------------------
 
@@ -153,9 +158,10 @@ CREATE TABLE `room` (
 --
 
 INSERT INTO `room` (`r_id`, `room_name`, `capcity`, `price_hr`, `status`, `created_at`) VALUES
-(1, 'VIP', 5, 100, 'Booked', '2026-01-29 13:18:39'),
-(2, 'Room 1', 7, 175, 'Available', '2026-01-30 09:48:02'),
-(3, 'Room 2', 10, 225, 'Booked', '2026-01-30 10:02:39');
+(3, 'Room 2', 10, 225, 'Available', '2026-02-06 10:55:05'),
+(4, 'Room 4', 10, 120, 'Available', '2026-02-06 10:54:56'),
+(5, 'Room 6', 8, 100, 'Available', '2026-02-06 10:54:48'),
+(6, 'VIP', 6, 200, 'Available', '2026-02-06 10:54:37');
 
 -- --------------------------------------------------------
 
@@ -179,7 +185,9 @@ CREATE TABLE `user_tbl` (
 
 INSERT INTO `user_tbl` (`id`, `name`, `email`, `password`, `contact`, `age`, `role`) VALUES
 (1, 'lebron', 'le@gmail.com', '$2y$10$cCTDEdTwJ.d3G.fb79IZ6eE9f7cpIzZD/UoiTiVfp07zkJzR12jfy', 2147483647, 19, 'admin'),
-(2, 'james', 'james@gmail.com', '$2y$10$38OzdXvijqa4i.KXqkVBNOisK4ii8ycLsiCD.9pmxP/YuHDtjrHX.', 985755355, 20, 'user');
+(2, 'james', 'james@gmail.com', '$2y$10$38OzdXvijqa4i.KXqkVBNOisK4ii8ycLsiCD.9pmxP/YuHDtjrHX.', 985755355, 20, 'user'),
+(3, 'admiin', 'admin@gmail.com', '$2y$10$s62v3OH1pu7i2doFhpdC..7NHB6LtOhQME.y2fcTGnqCxy9bOPMo.', 2147483647, 23, 'user'),
+(4, 'sasa', 'ad@gmail.com', '$2y$10$UbH5scOWQ7ksQwdD/YbNA.P.iLS9lul25KUJSPR9iF2Q63GFFbQ12', 2147483647, 23, 'user');
 
 --
 -- Indexes for dumped tables
@@ -241,13 +249,13 @@ ALTER TABLE `user_tbl`
 -- AUTO_INCREMENT for table `booking`
 --
 ALTER TABLE `booking`
-  MODIFY `b_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `b_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
 
 --
 -- AUTO_INCREMENT for table `booking_food`
 --
 ALTER TABLE `booking_food`
-  MODIFY `bf_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `bf_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT for table `extra_expense`
@@ -259,25 +267,25 @@ ALTER TABLE `extra_expense`
 -- AUTO_INCREMENT for table `food_beverages`
 --
 ALTER TABLE `food_beverages`
-  MODIFY `f_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `f_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=58;
 
 --
 -- AUTO_INCREMENT for table `payments`
 --
 ALTER TABLE `payments`
-  MODIFY `p_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `p_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- AUTO_INCREMENT for table `room`
 --
 ALTER TABLE `room`
-  MODIFY `r_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
+  MODIFY `r_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
 
 --
 -- AUTO_INCREMENT for table `user_tbl`
 --
 ALTER TABLE `user_tbl`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
 
 --
 -- Constraints for dumped tables

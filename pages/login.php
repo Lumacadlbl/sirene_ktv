@@ -17,17 +17,20 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     if ($result->num_rows === 1) {
         $user = $result->fetch_assoc();
 
+        // Verify password
         if (password_verify($password, $user["password"])) {
+            // Set session variables
             $_SESSION["user_id"] = $user["id"];
             $_SESSION["name"]    = $user["name"];
             $_SESSION["role"]    = $user["role"];
-
+            
+            // Redirect based on role
             if ($user["role"] === "admin") {
                 header("Location: admindash.php");
-                exit;
+                exit();
             } else {
                 header("Location: dashboard.php");
-                exit;
+                exit();
             }
         } else {
             $message = "Incorrect password.";
@@ -37,7 +40,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -46,6 +48,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <title>Login | Sirene KTV</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
+        /* Your existing CSS styles here */
         :root {
             --primary: #1a1a2e;
             --secondary: #16213e;
@@ -179,31 +182,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             padding: 40px 40px 30px;
             text-align: center;
             position: relative;
-        }
-
-        .back-btn {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            background: rgba(255, 255, 255, 0.1);
-            color: var(--light);
-            border: none;
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: all 0.3s;
-            text-decoration: none;
-            z-index: 3;
-        }
-
-        .back-btn:hover {
-            background: var(--highlight);
-            transform: translateX(-3px);
-            box-shadow: 0 5px 15px rgba(233, 69, 96, 0.3);
         }
 
         .logo {
@@ -381,9 +359,39 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             color: #ff7675;
         }
 
-        /* Submit Button */
+        /* Form Actions - BACK BUTTON ON LEFT SIDE */
+        .form-actions {
+            display: flex;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .back-btn {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--light);
+            border: none;
+            width: 60px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+        }
+
+        .back-btn:hover {
+            background: var(--highlight);
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(233, 69, 96, 0.3);
+        }
+
+        .back-btn i {
+            font-size: 20px;
+        }
+
         .submit-btn {
-            width: 100%;
+            flex: 1;
             padding: 16px;
             background: linear-gradient(135deg, var(--highlight), #ff4757);
             color: white;
@@ -486,34 +494,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             transform: translateX(2px);
         }
 
-        /* Social Login (Optional) */
-        .social-login {
-            display: flex;
-            gap: 15px;
-            margin-top: 20px;
-        }
-
-        .social-btn {
-            flex: 1;
-            padding: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 10px;
-            color: rgba(255, 255, 255, 0.8);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            text-decoration: none;
-            transition: all 0.3s;
-            font-size: 14px;
-        }
-
-        .social-btn:hover {
-            background: rgba(255, 255, 255, 0.1);
-            transform: translateY(-2px);
-        }
-
         /* Features */
         .features {
             display: flex;
@@ -575,6 +555,20 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             .social-login {
                 flex-direction: column;
             }
+            
+            .form-actions {
+                flex-direction: column;
+            }
+            
+            .back-btn {
+                width: 100%;
+                height: 50px;
+                order: 2;
+            }
+            
+            .submit-btn {
+                order: 1;
+            }
         }
     </style>
 </head>
@@ -586,11 +580,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 <!-- Decorative Elements -->
 <div class="decoration decoration-1"></div>
 <div class="decoration decoration-2"></div>
-
-<!-- Back Button -->
-<a href="landingpage.php" class="back-btn" title="Back to Home">
-    <i class="fas fa-arrow-left"></i>
-</a>
 
 <!-- Main Container -->
 <div class="login-container">
@@ -644,10 +633,18 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             </a>
         </div>
 
-        <!-- Submit Button -->
-        <button type="submit" class="submit-btn">
-            <i class="fas fa-sign-in-alt"></i> Sign In to Your Account
-        </button>
+        <!-- Form Actions - BACK BUTTON ON LEFT SIDE -->
+        <div class="form-actions">
+            <!-- Back button on LEFT side -->
+            <a href="landingpage.php" class="back-btn" title="Back to Home">
+                <i class="fas fa-arrow-left"></i>
+            </a>
+            
+            <!-- Login button on RIGHT side -->
+            <button type="submit" class="submit-btn">
+                <i class="fas fa-sign-in-alt"></i> Sign In
+            </button>
+        </div>
 
         <!-- Message Display -->
         <?php if ($message): ?>
@@ -656,21 +653,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 <?php echo htmlspecialchars($message); ?>
             </div>
         <?php endif; ?>
-
-        <!-- Divider -->
-        <div class="divider">
-            <span>Or continue with</span>
-        </div>
-
-        <!-- Social Login (Optional) -->
-        <div class="social-login">
-            <a href="#" class="social-btn">
-                <i class="fab fa-google"></i> Google
-            </a>
-            <a href="#" class="social-btn">
-                <i class="fab fa-facebook-f"></i> Facebook
-            </a>
-        </div>
 
         <!-- Register Link -->
         <div class="register-link">

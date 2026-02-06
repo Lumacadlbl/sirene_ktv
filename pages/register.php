@@ -5,7 +5,7 @@ $message = "";
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $name     = trim($_POST["name"]);
     $email    = trim($_POST["email"]);
-    $contact  = trim($_POST["contact"]);
+    $contact  = trim($_POST["country_code"] . $_POST["contact"]);
     $age      = (int)$_POST["age"];
     $password = password_hash($_POST["password"], PASSWORD_DEFAULT);
 
@@ -127,30 +127,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
 
-        .back-btn {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            background: rgba(255, 255, 255, 0.1);
-            color: var(--light);
-            border: none;
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: all 0.3s;
-            text-decoration: none;
-            z-index: 3;
-        }
-
-        .back-btn:hover {
-            background: var(--highlight);
-            transform: translateX(-3px);
-        }
-
         .logo {
             margin-bottom: 15px;
         }
@@ -206,6 +182,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             top: 50%;
             transform: translateY(-50%);
             color: rgba(255, 255, 255, 0.5);
+            z-index: 2;
         }
 
         .form-group label {
@@ -216,7 +193,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             font-weight: 500;
         }
 
-        .form-group input {
+        .form-group input,
+        .form-group select {
             width: 100%;
             padding: 15px 15px 15px 45px;
             background: rgba(255, 255, 255, 0.08);
@@ -227,11 +205,112 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             transition: all 0.3s;
         }
 
-        .form-group input:focus {
+        .form-group input:focus,
+        .form-group select:focus {
             outline: none;
             border-color: var(--highlight);
             background: rgba(255, 255, 255, 0.12);
             box-shadow: 0 0 0 2px rgba(233, 69, 96, 0.2);
+        }
+
+        .form-group select {
+            appearance: none;
+            cursor: pointer;
+            padding-right: 40px;
+        }
+
+        .select-arrow {
+            position: absolute;
+            right: 15px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: rgba(255, 255, 255, 0.5);
+            pointer-events: none;
+            z-index: 2;
+        }
+
+        /* Contact Input Group */
+        .contact-group {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .country-code-select {
+            position: relative;
+            min-width: 120px;
+        }
+
+        .country-code-select select {
+            padding: 15px 35px 15px 40px;
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            color: var(--light); /* White text when closed */
+            font-size: 14px;
+            height: 100%;
+            cursor: pointer;
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+        }
+
+        /* Style for the dropdown options when opened */
+        .country-code-select select option {
+            background-color: #ffffff; /* White background */
+            color: #000000; /* Black text */
+            padding: 12px 15px;
+            font-size: 14px;
+        }
+
+        /* Style for the selected option in dropdown */
+        .country-code-select select option:checked {
+            background-color: #f0f0f0; /* Light gray background */
+            color: #000000; /* Black text */
+        }
+
+        /* For the dropdown when it's open */
+        .country-code-select select:focus option:checked {
+            background-color: var(--highlight);
+            color: #ffffff;
+        }
+
+        /* For Firefox - ensure black text in dropdown */
+        @-moz-document url-prefix() {
+            .country-code-select select {
+                color: var(--light);
+                text-shadow: 0 0 0 var(--light);
+            }
+            
+            .country-code-select select option {
+                background-color: #ffffff !important;
+                color: #000000 !important;
+            }
+        }
+
+        /* For WebKit browsers (Chrome, Safari, Edge) */
+        .country-code-select select option {
+            background-color: #ffffff !important;
+            color: #000000 !important;
+        }
+
+        /* When dropdown is open, change the closed state text to white */
+        .country-code-select select {
+            color: var(--light) !important;
+        }
+
+        .country-flag {
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 16px;
+            z-index: 2;
+        }
+
+        .phone-input {
+            flex: 1;
         }
 
         .password-strength {
@@ -281,9 +360,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             text-decoration: underline;
         }
 
-        /* Submit Button */
+        /* Form Actions */
+        .form-actions {
+            display: flex;
+            gap: 15px;
+            margin-top: 10px;
+        }
+
         .submit-btn {
-            width: 100%;
+            flex: 1;
             padding: 16px;
             background: linear-gradient(135deg, var(--highlight), #ff4757);
             color: white;
@@ -297,7 +382,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             align-items: center;
             justify-content: center;
             gap: 10px;
-            margin-top: 10px;
         }
 
         .submit-btn:hover {
@@ -311,6 +395,29 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             cursor: not-allowed;
             transform: none;
             box-shadow: none;
+        }
+
+        .back-btn {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--light);
+            border: none;
+            width: 60px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+        }
+
+        .back-btn:hover {
+            background: var(--highlight);
+            transform: translateY(-3px);
+        }
+
+        .back-btn i {
+            font-size: 20px;
         }
 
         /* Message */
@@ -402,6 +509,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             .register-form {
                 padding: 25px 30px;
             }
+            
+            .contact-group {
+                grid-template-columns: 1fr;
+                gap: 10px;
+            }
+            
+            .country-code-select {
+                min-width: 100%;
+            }
         }
 
         @media (max-width: 480px) {
@@ -413,6 +529,20 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             .logo h1 {
                 font-size: 24px;
             }
+            
+            .form-actions {
+                flex-direction: column;
+            }
+            
+            .back-btn {
+                width: 100%;
+                height: 50px;
+                order: 2;
+            }
+            
+            .submit-btn {
+                order: 1;
+            }
         }
     </style>
 </head>
@@ -420,11 +550,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
 <!-- Animated Background -->
 <div class="bg-animation" id="musicNotes"></div>
-
-<!-- Back Button -->
-<a href="landingpage.php" class="back-btn" title="Back to Home">
-    <i class="fas fa-arrow-left"></i>
-</a>
 
 <!-- Main Container -->
 <div class="register-container">
@@ -467,10 +592,44 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         <div class="form-group">
             <label for="contact"><i class="fas fa-phone"></i> Contact Number</label>
-            <div class="input-with-icon">
-                <i class="fas fa-phone input-icon"></i>
-                <input type="text" id="contact" name="contact" placeholder="Enter your phone number" required>
+            <div class="contact-group">
+                <div class="country-code-select">
+                    <div class="input-with-icon">
+                        <i class="fas fa-globe input-icon"></i>
+                        <select id="country_code" name="country_code" required>
+                            <option value="">Select Country</option>
+                            <option value="+1" data-flag="🇺🇸">🇺🇸 USA (+1)</option>
+                            <option value="+44" data-flag="🇬🇧">🇬🇧 UK (+44)</option>
+                            <option value="+61" data-flag="🇦🇺">🇦🇺 Australia (+61)</option>
+                            <option value="+65" data-flag="🇸🇬">🇸🇬 Singapore (+65)</option>
+                            <option value="+60" data-flag="🇲🇾">🇲🇾 Malaysia (+60)</option>
+                            <option value="+63" data-flag="🇵🇭">🇵🇭 Philippines (+63)</option>
+                            <option value="+81" data-flag="🇯🇵">🇯🇵 Japan (+81)</option>
+                            <option value="+82" data-flag="🇰🇷">🇰🇷 South Korea (+82)</option>
+                            <option value="+86" data-flag="🇨🇳">🇨🇳 China (+86)</option>
+                            <option value="+91" data-flag="🇮🇳">🇮🇳 India (+91)</option>
+                            <option value="+971" data-flag="🇦🇪">🇦🇪 UAE (+971)</option>
+                            <option value="+33" data-flag="🇫🇷">🇫🇷 France (+33)</option>
+                            <option value="+49" data-flag="🇩🇪">🇩🇪 Germany (+49)</option>
+                            <option value="+34" data-flag="🇪🇸">🇪🇸 Spain (+34)</option>
+                            <option value="+39" data-flag="🇮🇹">🇮🇹 Italy (+39)</option>
+                            <option value="+55" data-flag="🇧🇷">🇧🇷 Brazil (+55)</option>
+                            <option value="+52" data-flag="🇲🇽">🇲🇽 Mexico (+52)</option>
+                        </select>
+                        <i class="fas fa-chevron-down select-arrow"></i>
+                    </div>
+                </div>
+                <div class="phone-input">
+                    <div class="input-with-icon">
+                        <i class="fas fa-phone input-icon"></i>
+                        <input type="text" id="contact" name="contact" placeholder="Phone number" required 
+                               pattern="[0-9]{7,15}" title="Enter 7-15 digits without country code">
+                    </div>
+                </div>
             </div>
+            <small style="color: rgba(255,255,255,0.5); font-size: 12px; display: block; margin-top: 5px;">
+                Select your country and enter phone number (digits only)
+            </small>
         </div>
 
         <div class="form-group">
@@ -504,13 +663,19 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             </label>
         </div>
 
-        <!-- Submit Button -->
-        <button type="submit" class="submit-btn" id="submitBtn">
-            <i class="fas fa-user-plus"></i> Create Account
-        </button>
+        <!-- Form Actions -->
+        <div class="form-actions">
+            <a href="landingpage.php" class="back-btn" title="Back to Home">
+                <i class="fas fa-arrow-left"></i>
+            </a>
+            
+            <button type="submit" class="submit-btn" id="submitBtn">
+                <i class="fas fa-user-plus"></i> Create Account
+            </button>
+        </div>
 
         <!-- Message Display -->
-        <?php if ($message): ?>
+        <?php if (isset($message) && !empty($message)): ?>
             <div class="message <?php echo strpos($message, 'successful') !== false ? 'success' : 'error'; ?>">
                 <i class="fas <?php echo strpos($message, 'successful') !== false ? 'fa-check-circle' : 'fa-exclamation-circle'; ?>"></i>
                 <?php echo htmlspecialchars($message); ?>
@@ -555,6 +720,43 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             note.style.fontSize = (Math.random() * 20 + 15) + 'px';
             note.style.color = `rgba(233, 69, 96, ${Math.random() * 0.1 + 0.05})`;
             bgAnimation.appendChild(note);
+        }
+
+        // Update flag display when country changes
+        const countrySelect = document.getElementById('country_code');
+        
+        countrySelect.addEventListener('change', function() {
+            const selectedOption = this.options[this.selectedIndex];
+            const flag = selectedOption.getAttribute('data-flag');
+            
+            // Update phone placeholder based on country
+            const countryCode = this.value;
+            updatePhonePlaceholder(countryCode);
+        });
+
+        function updatePhonePlaceholder(countryCode) {
+            const phoneInput = document.getElementById('contact');
+            const examples = {
+                '+1': '5551234567',
+                '+44': '7911123456',
+                '+61': '412345678',
+                '+65': '91234567',
+                '+60': '123456789',
+                '+63': '9171234567',
+                '+81': '9012345678',
+                '+82': '1023456789',
+                '+86': '13123456789',
+                '+91': '9876543210',
+                '+971': '501234567',
+                '+33': '612345678',
+                '+49': '15123456789',
+                '+34': '612345678',
+                '+39': '3123456789',
+                '+55': '11987654321',
+                '+52': '5512345678'
+            };
+            
+            phoneInput.placeholder = examples[countryCode] || 'Phone number';
         }
 
         // Check password strength
@@ -609,6 +811,22 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             const password = document.getElementById('password').value;
             const confirmPassword = document.getElementById('confirmPassword').value;
             const terms = document.getElementById('terms').checked;
+            const countryCode = document.getElementById('country_code').value;
+            const phone = document.getElementById('contact').value;
+            
+            // Check country selection
+            if (!countryCode) {
+                e.preventDefault();
+                alert('Please select your country');
+                return;
+            }
+            
+            // Check phone number
+            if (!/^[0-9]{7,15}$/.test(phone)) {
+                e.preventDefault();
+                alert('Please enter a valid phone number (7-15 digits)');
+                return;
+            }
             
             if (password !== confirmPassword) {
                 e.preventDefault();
@@ -641,11 +859,70 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             }
         });
 
-        // Contact number formatting
+        // Contact number formatting - allow only digits
         const contactInput = document.getElementById('contact');
         contactInput.addEventListener('input', function() {
-            this.value = this.value.replace(/[^0-9+]/g, '');
+            this.value = this.value.replace(/[^0-9]/g, '');
+            
+            // Validate length based on country
+            const countryCode = document.getElementById('country_code').value;
+            const minLength = getMinPhoneLength(countryCode);
+            const maxLength = getMaxPhoneLength(countryCode);
+            
+            if (this.value.length < minLength) {
+                this.setCustomValidity(`Phone number should be at least ${minLength} digits for this country`);
+            } else if (this.value.length > maxLength) {
+                this.setCustomValidity(`Phone number should not exceed ${maxLength} digits`);
+            } else {
+                this.setCustomValidity('');
+            }
         });
+
+        function getMinPhoneLength(countryCode) {
+            const minLengths = {
+                '+1': 10, // USA/Canada
+                '+44': 10, // UK
+                '+61': 9, // Australia
+                '+65': 8, // Singapore
+                '+60': 9, // Malaysia
+                '+63': 10, // Philippines
+                '+81': 10, // Japan
+                '+82': 10, // South Korea
+                '+86': 11, // China
+                '+91': 10, // India
+                '+971': 9, // UAE
+                '+33': 9, // France
+                '+49': 10, // Germany
+                '+34': 9, // Spain
+                '+39': 10, // Italy
+                '+55': 11, // Brazil
+                '+52': 10 // Mexico
+            };
+            return minLengths[countryCode] || 7;
+        }
+
+        function getMaxPhoneLength(countryCode) {
+            const maxLengths = {
+                '+1': 10,
+                '+44': 10,
+                '+61': 9,
+                '+65': 8,
+                '+60': 9,
+                '+63': 10,
+                '+81': 10,
+                '+82': 10,
+                '+86': 11,
+                '+91': 10,
+                '+971': 9,
+                '+33': 9,
+                '+49': 10,
+                '+34': 9,
+                '+39': 10,
+                '+55': 11,
+                '+52': 10
+            };
+            return maxLengths[countryCode] || 15;
+        }
     });
 </script>
 
