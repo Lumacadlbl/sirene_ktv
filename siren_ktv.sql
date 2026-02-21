@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Feb 06, 2026 at 05:46 PM
+-- Generation Time: Feb 21, 2026 at 04:00 AM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -40,8 +40,11 @@ CREATE TABLE `booking` (
   `subtotal` decimal(10,0) NOT NULL,
   `tax_amount` decimal(10,0) NOT NULL,
   `total_amount` decimal(10,0) NOT NULL,
+  `notes` text DEFAULT NULL,
   `status` varchar(100) NOT NULL,
   `payment_status` varchar(100) NOT NULL,
+  `downpayment` decimal(10,2) DEFAULT NULL,
+  `paymongo_payment_id` varchar(100) DEFAULT NULL,
   `created_at` int(50) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
@@ -49,8 +52,8 @@ CREATE TABLE `booking` (
 -- Dumping data for table `booking`
 --
 
-INSERT INTO `booking` (`b_id`, `u_id`, `r_id`, `booking_date`, `start_time`, `end_time`, `hours`, `room_amount`, `food_amount`, `subtotal`, `tax_amount`, `total_amount`, `status`, `payment_status`, `created_at`) VALUES
-(14, 2, 7, '2026-02-07 00:00:00', '18:00:00', '20:00:00', 2, 240, 2400, 2640, 264, 2904, 'Approved', 'paid', 2147483647);
+INSERT INTO `booking` (`b_id`, `u_id`, `r_id`, `booking_date`, `start_time`, `end_time`, `hours`, `room_amount`, `food_amount`, `subtotal`, `tax_amount`, `total_amount`, `notes`, `status`, `payment_status`, `downpayment`, `paymongo_payment_id`, `created_at`) VALUES
+(28, 13, 7, '2026-02-22 00:00:00', '18:00:00', '20:00:00', 2, 240, 0, 240, 24, 264, NULL, 'confirmed', 'pending_payment', NULL, 'cs_58de5a2ee2d4c2a7e55cf72f', 2147483647);
 
 -- --------------------------------------------------------
 
@@ -63,17 +66,9 @@ CREATE TABLE `booking_food` (
   `b_id` int(11) NOT NULL,
   `f_id` int(11) NOT NULL,
   `quantity` int(11) NOT NULL,
-  `price` int(11) NOT NULL
+  `price` decimal(10,2) NOT NULL,
+  `served` enum('pending','served','cancelled') DEFAULT 'pending'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
---
--- Dumping data for table `booking_food`
---
-
-INSERT INTO `booking_food` (`bf_id`, `b_id`, `f_id`, `quantity`, `price`) VALUES
-(7, 14, 50, 4, 320),
-(8, 14, 18, 2, 280),
-(9, 14, 22, 2, 280);
 
 -- --------------------------------------------------------
 
@@ -159,7 +154,8 @@ CREATE TABLE `payments` (
 --
 
 INSERT INTO `payments` (`p_id`, `b_id`, `u_id`, `payment_method`, `payment_status`, `amount`, `payment_date`) VALUES
-(9, 14, 2, 'cash', 'completed', 2904.00, '2026-02-06 09:30:33');
+(15, 28, 13, 'card', 'pending', 264.00, '2026-02-21 02:40:30'),
+(16, 28, 13, 'paymaya', 'pending', 264.00, '2026-02-21 02:41:55');
 
 -- --------------------------------------------------------
 
@@ -181,8 +177,8 @@ CREATE TABLE `room` (
 --
 
 INSERT INTO `room` (`r_id`, `room_name`, `capcity`, `price_hr`, `status`, `created_at`) VALUES
-(6, 'VIP', 6, 200, 'Available', '2026-02-06 10:54:37'),
-(7, 'Party room', 12, 120, 'Booked', '2026-02-06 16:30:06');
+(6, 'VIP', 6, 200, 'Available', '2026-02-20 12:51:37'),
+(7, 'Party room', 12, 120, 'Available', '2026-02-20 12:51:33');
 
 -- --------------------------------------------------------
 
@@ -195,7 +191,8 @@ CREATE TABLE `user_tbl` (
   `name` varchar(100) NOT NULL,
   `email` varchar(100) NOT NULL,
   `password` varchar(100) NOT NULL,
-  `contact` int(50) NOT NULL,
+  `contact` varchar(20) DEFAULT NULL,
+  `country_code` varchar(10) DEFAULT NULL,
   `age` int(50) NOT NULL,
   `role` varchar(100) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
@@ -204,11 +201,10 @@ CREATE TABLE `user_tbl` (
 -- Dumping data for table `user_tbl`
 --
 
-INSERT INTO `user_tbl` (`id`, `name`, `email`, `password`, `contact`, `age`, `role`) VALUES
-(1, 'lebron', 'le@gmail.com', '$2y$10$cCTDEdTwJ.d3G.fb79IZ6eE9f7cpIzZD/UoiTiVfp07zkJzR12jfy', 2147483647, 19, 'admin'),
-(2, 'james', 'james@gmail.com', '$2y$10$38OzdXvijqa4i.KXqkVBNOisK4ii8ycLsiCD.9pmxP/YuHDtjrHX.', 985755355, 20, 'user'),
-(3, 'admiin', 'admin@gmail.com', '$2y$10$s62v3OH1pu7i2doFhpdC..7NHB6LtOhQME.y2fcTGnqCxy9bOPMo.', 2147483647, 23, 'user'),
-(4, 'sasa', 'ad@gmail.com', '$2y$10$UbH5scOWQ7ksQwdD/YbNA.P.iLS9lul25KUJSPR9iF2Q63GFFbQ12', 2147483647, 23, 'user');
+INSERT INTO `user_tbl` (`id`, `name`, `email`, `password`, `contact`, `country_code`, `age`, `role`) VALUES
+(12, 'Le Bron', 'le@gmail.com', '$2y$10$WTlhNTUO6Umd2q1gkwMFzOdCvAe5OvGCbleDg9Ogj0j4MX36/K5XO', '9663675293', '+63', 19, 'admin'),
+(13, 'James', 'james@gmail.com', '$2y$10$1QrgZwkK5kVf/t8bkZjB.e66gaSR6KNoXhOxC3ucUye7AYTniUKdO', '754345678', '+34', 19, 'user'),
+(14, 'Yvan', 'yvan@gmail.com', '$2y$10$GdlFrq44FpPttXmRM/tDpOIIkA7Wf/8UdtF0F/zYTiQUBr0wvP9N6', '123456789', '+971', 19, 'user');
 
 --
 -- Indexes for dumped tables
@@ -270,13 +266,13 @@ ALTER TABLE `user_tbl`
 -- AUTO_INCREMENT for table `booking`
 --
 ALTER TABLE `booking`
-  MODIFY `b_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
+  MODIFY `b_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=29;
 
 --
 -- AUTO_INCREMENT for table `booking_food`
 --
 ALTER TABLE `booking_food`
-  MODIFY `bf_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+  MODIFY `bf_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=18;
 
 --
 -- AUTO_INCREMENT for table `extra_expense`
@@ -294,19 +290,19 @@ ALTER TABLE `food_beverages`
 -- AUTO_INCREMENT for table `payments`
 --
 ALTER TABLE `payments`
-  MODIFY `p_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
+  MODIFY `p_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=17;
 
 --
 -- AUTO_INCREMENT for table `room`
 --
 ALTER TABLE `room`
-  MODIFY `r_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
+  MODIFY `r_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
 
 --
 -- AUTO_INCREMENT for table `user_tbl`
 --
 ALTER TABLE `user_tbl`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=5;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=15;
 
 --
 -- Constraints for dumped tables

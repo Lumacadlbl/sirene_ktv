@@ -5,20 +5,33 @@ $message = "";
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $name     = trim($_POST["name"]);
     $email    = trim($_POST["email"]);
-    $contact  = trim($_POST["country_code"] . $_POST["contact"]);
+    $contact  = trim($_POST["contact"]);
+    $country_code = trim($_POST["country_code"]);
     $age      = (int)$_POST["age"];
     $password = password_hash($_POST["password"], PASSWORD_DEFAULT);
 
-    $sql = "INSERT INTO user_tbl (name, email, password, contact, age, role)
-            VALUES (?, ?, ?, ?, ?, 'user')";
+    
+    if (strpos($country_code, '+') !== 0) {
+        $country_code = '+' . $country_code;
+    }
+
+    
+    $sql = "INSERT INTO user_tbl (name, email, password, contact, country_code, age, role)
+            VALUES (?, ?, ?, ?, ?, ?, 'user')";
 
     $stmt = $conn->prepare($sql);
-    $stmt->bind_param("ssssi", $name, $email, $password, $contact, $age);
+    
+    $stmt->bind_param("sssssi", $name, $email, $password, $contact, $country_code, $age);
+   
 
     if ($stmt->execute()) {
         $message = "Registration successful! You can now log in.";
     } else {
-        $message = "Email already exists.";
+        if ($conn->errno == 1062) {
+            $message = "Email already exists.";
+        } else {
+            $message = "Registration failed: " . $conn->error;
+        }
     }
 }
 ?>

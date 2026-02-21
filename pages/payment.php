@@ -2,6 +2,10 @@
 session_start();
 include "../db.php";
 
+// TURN ON ERROR DISPLAY
+error_reporting(E_ALL);
+ini_set('display_errors', 1);
+
 if (!isset($_SESSION['user_id'])) {
     header("Location: login.php");
     exit;
@@ -12,9 +16,25 @@ $name = $_SESSION['name'] ?? 'User';
 $role = $_SESSION['role'] ?? 'user';
 $booking_id = $_GET['id'] ?? 0;
 
+// PayMongo Keys
+$paymongo_secret_key = 'sk_test_CuXgiJJHcBEX24FTGBE6KxPd';
+$paymongo_public_key = 'pk_test_PQdr5QWdEXHTJLcs6RXyYjM7';
+
+// FIRST: Check if downpayment column exists, if not create it
+$check_column = $conn->query("SHOW COLUMNS FROM booking LIKE 'downpayment'");
+if ($check_column->num_rows == 0) {
+    $conn->query("ALTER TABLE booking ADD COLUMN downpayment DECIMAL(10,2) NULL DEFAULT NULL AFTER payment_status");
+}
+
+// Check if paymongo_payment_id column exists
+$check_paymongo = $conn->query("SHOW COLUMNS FROM booking LIKE 'paymongo_payment_id'");
+if ($check_paymongo->num_rows == 0) {
+    $conn->query("ALTER TABLE booking ADD COLUMN paymongo_payment_id VARCHAR(100) NULL AFTER downpayment");
+}
+
 // Fetch booking details
 $booking_query = $conn->prepare("
-    SELECT b.*, r.room_name, r.price_hr 
+    SELECT b.*, r.room_name, r.price_hr, r.capcity 
     FROM booking b 
     JOIN room r ON b.r_id = r.r_id 
     WHERE b.b_id = ? AND b.u_id = ?
@@ -36,90 +56,182 @@ if ($booking['payment_status'] == 'paid' || $booking['payment_status'] == 'appro
     exit;
 }
 
-// Handle form submission - SIMULATED PAYMENT
-if ($_SERVER['REQUEST_METHOD'] == 'POST') {
-    $payment_method = $_POST['payment_method'];
+// Calculate duration
+$start = new DateTime($booking['start_time']);
+$end = new DateTime($booking['end_time']);
+$interval = $start->diff($end);
+$hours = $interval->h + ($interval->i / 60);
+
+// Calculate downpayment (20% of total)
+$total_amount = $booking['total_amount'];
+$downpayment = $total_amount * 0.20;
+$remaining = $total_amount - $downpayment;
+
+// Function to create PayMongo checkout session
+function createPayMongoCheckout($amount, $description, $booking_id, $user_id, $payment_method, $secret_key, $room_name, $hours) {
+    $amount_in_centavos = $amount * 100; // PayMongo uses centavos
     
-    // Validate payment (simulated validation)
-    if (validatePayment($payment_method, $_POST)) {
-        // SIMULATE PAYMENT PROCESSING DELAY
-        sleep(2); // 2 second delay to simulate processing
-        
-        // Generate random success/failure (90% success rate for demo)
-        $success_rate = 90; // 90% success rate
-        $is_successful = (rand(1, 100) <= $success_rate);
-        
-        if ($is_successful) {
-            // Start transaction to ensure both updates succeed
+    $ch = curl_init();
+    
+    // Determine payment method types
+    $payment_method_types = [];
+    if ($payment_method == 'gcash') {
+        $payment_method_types = ['gcash'];
+    } elseif ($payment_method == 'paymaya') {
+        $payment_method_types = ['paymaya'];
+    } elseif ($payment_method == 'card') {
+        $payment_method_types = ['card'];
+    } else {
+        $payment_method_types = ['gcash', 'paymaya', 'card'];
+    }
+    
+    // Create line items
+    $line_items = [
+        [
+            'name' => $room_name . ' - KTV Room',
+            'quantity' => 1,
+            'amount' => $amount_in_centavos,
+            'description' => $description . ' (' . number_format($hours, 1) . ' hours)',
+            'currency' => 'PHP'
+        ]
+    ];
+    
+    $data = [
+        'data' => [
+            'attributes' => [
+                'line_items' => $line_items,
+                'payment_method_types' => $payment_method_types,
+                'success_url' => 'http://localhost/sirene_ktv/pages/payment-success.php?booking_id=' . $booking_id . '&session_id={CHECKOUT_SESSION_ID}',
+                'cancel_url' => 'http://localhost/sirene_ktv/pages/payment-failed.php?booking_id=' . $booking_id,
+                'description' => $description,
+                'metadata' => [
+                    'booking_id' => $booking_id,
+                    'user_id' => $user_id,
+                    'room_name' => $room_name,
+                    'hours' => $hours
+                ]
+            ]
+        ]
+    ];
+    
+    curl_setopt($ch, CURLOPT_URL, 'https://api.paymongo.com/v1/checkout_sessions');
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+    curl_setopt($ch, CURLOPT_POST, 1);
+    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+    curl_setopt($ch, CURLOPT_HTTPHEADER, [
+        'Content-Type: application/json',
+        'Authorization: Basic ' . base64_encode($secret_key . ':'),
+        'Accept: application/json'
+    ]);
+    
+    $response = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    
+    if (curl_error($ch)) {
+        $error = curl_error($ch);
+        curl_close($ch);
+        return ['error' => true, 'message' => $error];
+    }
+    
+    curl_close($ch);
+    
+    $response_data = json_decode($response, true);
+    
+    if ($http_code >= 400) {
+        error_log("PayMongo Error: " . $response);
+        return ['error' => true, 'response' => $response_data];
+    }
+    
+    return ['error' => false, 'response' => $response_data];
+}
+
+// Handle PayMongo payment creation
+if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) {
+    $payment_method = $_POST['payment_method'];
+    $amount_to_pay = ($payment_method == 'store') ? $downpayment : $total_amount;
+    $description = "Booking #" . str_pad($booking_id, 6, '0', STR_PAD_LEFT) . " - " . $booking['room_name'];
+    
+    if ($payment_method == 'store') {
+        // Handle store payment (direct database update)
+        try {
             $conn->begin_transaction();
             
-            try {
-                // Update booking payment status
-                $update_booking = $conn->prepare("UPDATE booking SET payment_status = 'paid' WHERE b_id = ?");
-                $update_booking->bind_param("i", $booking_id);
-                $update_booking->execute();
-                
-                // Insert payment record into payments table
-                $payment_date = date('Y-m-d H:i:s');
-                $insert_payment = $conn->prepare("
-                    INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
-                    VALUES (?, ?, ?, 'completed', ?, ?)
-                ");
-                $insert_payment->bind_param("iisds", $booking_id, $user_id, $payment_method, $booking['total_amount'], $payment_date);
-                $insert_payment->execute();
-                
-                // Commit transaction
-                $conn->commit();
-                
-                // Log the simulated payment
-                error_log("Payment successful - Booking #{$booking_id}, Amount: {$booking['total_amount']}, Method: {$payment_method}");
-                
-                header("Location: payment-success.php?id=" . $booking_id);
-                exit;
-                
-            } catch (Exception $e) {
-                // Rollback on error
-                $conn->rollback();
-                $_SESSION['payment_error'] = "Payment processing failed. Please try again.";
-                header("Location: make-payment.php?id=" . $booking_id);
-                exit;
-            }
-        } else {
-            // Simulate payment failure
-            $_SESSION['payment_error'] = "Payment failed. Please try again or use a different payment method.";
-            header("Location: payment-failed.php?id=" . $booking_id . "&method=" . $payment_method);
+            // Update booking
+            $update = $conn->prepare("UPDATE booking SET payment_status = 'pending_store', downpayment = ? WHERE b_id = ?");
+            $update->bind_param("di", $downpayment, $booking_id);
+            $update->execute();
+            
+            // Insert into payments table (without transaction_id)
+            $payment_insert = $conn->prepare("
+                INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
+                VALUES (?, ?, 'store', 'pending', ?, NOW())
+            ");
+            $payment_insert->bind_param("iid", $booking_id, $user_id, $downpayment);
+            $payment_insert->execute();
+            
+            $conn->commit();
+            
+            // Redirect to success page
+            header("Location: payment-success.php?booking_id=" . $booking_id . "&method=store");
             exit;
+            
+        } catch (Exception $e) {
+            $conn->rollback();
+            $error = "Database error: " . $e->getMessage();
         }
     } else {
-        $_SESSION['payment_error'] = "Invalid payment details. Please check your information and try again.";
-        header("Location: make-payment.php?id=" . $booking_id);
-        exit;
+        // Create PayMongo checkout session
+        $result = createPayMongoCheckout(
+            $amount_to_pay, 
+            $description, 
+            $booking_id, 
+            $user_id, 
+            $payment_method, 
+            $paymongo_secret_key,
+            $booking['room_name'],
+            $hours
+        );
+        
+        if ($result['error']) {
+            if (isset($result['response']['errors'])) {
+                $error = "PayMongo Error: " . json_encode($result['response']['errors']);
+            } else {
+                $error = "Failed to create payment: " . ($result['message'] ?? 'Unknown error');
+            }
+        } else {
+            // Get checkout URL and session ID from response
+            $checkout_url = $result['response']['data']['attributes']['checkout_url'];
+            $session_id = $result['response']['data']['id'];
+            
+            // Store session_id in booking table
+            $update = $conn->prepare("UPDATE booking SET paymongo_payment_id = ?, payment_status = 'pending_payment' WHERE b_id = ?");
+            $update->bind_param("si", $session_id, $booking_id);
+            $update->execute();
+            
+            // Insert into payments table (without transaction_id)
+            $payment_insert = $conn->prepare("
+                INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
+                VALUES (?, ?, ?, 'pending', ?, NOW())
+            ");
+            $payment_insert->bind_param("iisd", $booking_id, $user_id, $payment_method, $amount_to_pay);
+            $payment_insert->execute();
+            
+            // Redirect to PayMongo checkout
+            header("Location: " . $checkout_url);
+            exit;
+        }
     }
 }
 
-function validatePayment($method, $data) {
-    // SIMULATED VALIDATION - Always returns true for demo
-    // In a real system, you would validate actual payment details
-    switch($method) {
-        case 'card':
-            // Simulated validation - just check if fields are filled
-            return !empty($data['card_number']) && !empty($data['expiry_date']) && 
-                   !empty($data['card_name']);
-        case 'upi':
-            return !empty($data['upi_id']);
-        case 'gcash':
-            return !empty($data['gcash_number']);
-        case 'paymaya':
-            return !empty($data['paymaya_number']);
-        case 'paypal':
-            return !empty($data['paypal_email']);
-        case 'bank_transfer':
-            return !empty($data['account_name']) && !empty($data['account_number']) && !empty($data['bank_name']);
-        case 'cash':
-            return true; // Cash payment always valid for demo
-        default:
-            return false;
-    }
+// For debugging - show the actual error
+if (isset($error)) {
+    echo "<div style='background: rgba(214, 48, 49, 0.2); border: 2px solid #d63031; border-radius: 10px; padding: 20px; margin: 20px; color: #d63031;'>";
+    echo "<h3><i class='fas fa-exclamation-circle'></i> Payment Error</h3>";
+    echo "<pre style='background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; margin-top: 10px; color: #ff9999; white-space: pre-wrap;'>";
+    echo htmlspecialchars(print_r($error, true));
+    echo "</pre>";
+    echo "<p style='margin-top: 10px; font-size: 14px;'>Please try again or contact support.</p>";
+    echo "</div>";
 }
 ?>
 <!DOCTYPE html>
@@ -130,28 +242,27 @@ function validatePayment($method, $data) {
     <title>Payment - Booking #<?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?> - Sirene KTV</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
+        /* Keep all your existing CSS here */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
         :root {
             --primary: #1a1a2e;
             --secondary: #16213e;
             --accent: #0f3460;
             --highlight: #e94560;
             --light: #f5f5f5;
-            --dark: #0d1117;
             --success: #00b894;
             --warning: #fdcb6e;
             --danger: #d63031;
             --info: #0984e3;
-            --purple: #6c5ce7;
-            --gcash: #0c7d69;
-            --paymaya: #ff6b00;
-            --paypal: #003087;
-            --bank: #4a6fa5;
-        }
-
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
+            --gcash: #0057e4;
+            --paymaya: #ff4d4d;
+            --card: #6c5ce7;
+            --store: #00b894;
         }
 
         body {
@@ -162,12 +273,17 @@ function validatePayment($method, $data) {
         }
 
         header {
-            background: rgba(10, 10, 20, 0.95);
-            padding: 18px 30px;
+            background: rgba(10, 10, 20, 0.98);
+            padding: 15px 40px;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            border-bottom: 2px solid var(--highlight);
+            border-bottom: 3px solid var(--highlight);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
         }
 
         .header-left h1 {
@@ -176,28 +292,32 @@ function validatePayment($method, $data) {
             -webkit-background-clip: text;
             background-clip: text;
             color: transparent;
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
 
         .header-left p {
             color: #aaa;
             font-size: 13px;
-            margin-top: 3px;
+            margin-top: 5px;
         }
 
         .header-right {
             display: flex;
             align-items: center;
-            gap: 18px;
+            gap: 20px;
         }
 
         .user-info {
             background: var(--accent);
-            padding: 7px 14px;
-            border-radius: 18px;
-            font-size: 13px;
+            padding: 10px 20px;
+            border-radius: 30px;
+            font-size: 14px;
             display: flex;
             align-items: center;
-            gap: 7px;
+            gap: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         .user-info i {
@@ -207,407 +327,614 @@ function validatePayment($method, $data) {
         .back-btn {
             background: linear-gradient(135deg, var(--accent), #0f3460);
             color: white;
-            border: none;
-            padding: 9px 22px;
-            border-radius: 22px;
+            padding: 10px 25px;
+            border-radius: 30px;
             font-weight: 600;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.3s;
             display: flex;
             align-items: center;
-            gap: 7px;
-            font-size: 13px;
+            gap: 10px;
             text-decoration: none;
+            font-size: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         .back-btn:hover {
             background: linear-gradient(135deg, #0f3460, var(--accent));
-            transform: translateY(-1px);
-            text-decoration: none;
-            color: white;
+            transform: translateY(-2px);
+            border-color: var(--highlight);
         }
 
         .container {
-            max-width: 900px;
-            margin: 30px auto;
-            padding: 0 20px;
+            max-width: 1000px;
+            margin: 40px auto;
+            padding: 0 30px;
         }
 
         .page-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
             margin-bottom: 30px;
-            background: rgba(255, 255, 255, 0.05);
-            padding: 25px;
-            border-radius: 15px;
-            border-left: 4px solid var(--highlight);
         }
 
-        .page-title h2 {
-            font-size: 28px;
-            color: var(--light);
-            margin-bottom: 5px;
+        .page-header h2 {
+            font-size: 32px;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 15px;
+            color: white;
         }
 
-        .page-title h2 i {
+        .page-header h2 i {
             color: var(--highlight);
+            background: rgba(233, 69, 96, 0.2);
+            padding: 15px;
+            border-radius: 50%;
         }
 
-        .page-title p {
-            color: rgba(255, 255, 255, 0.7);
+        .page-header p {
+            color: #aaa;
+            margin-top: 10px;
+            font-size: 16px;
+        }
+
+        .live-banner {
+            background: linear-gradient(135deg, rgba(0, 184, 148, 0.15), rgba(0, 184, 148, 0.05));
+            border: 2px solid var(--success);
+            border-radius: 15px;
+            padding: 20px 25px;
+            margin-bottom: 30px;
+            display: flex;
+            align-items: center;
+            gap: 20px;
+            backdrop-filter: blur(10px);
+        }
+
+        .live-banner i {
+            font-size: 30px;
+            color: var(--success);
+        }
+
+        .live-banner-content h3 {
+            color: var(--success);
+            margin-bottom: 5px;
+            font-size: 18px;
+        }
+
+        .live-banner-content p {
+            color: rgba(255, 255, 255, 0.8);
             font-size: 14px;
         }
 
-        .demo-notice {
-            background: rgba(253, 203, 110, 0.2);
-            border: 1px solid rgba(253, 203, 110, 0.3);
-            border-radius: 10px;
-            padding: 15px;
-            margin: 20px 0;
-            text-align: center;
-            color: var(--light);
-        }
-
-        .demo-notice i {
-            color: var(--warning);
-            margin-right: 10px;
-        }
-
-        .booking-info {
-            background: rgba(255, 255, 255, 0.08);
+        .policy-banner {
+            background: linear-gradient(135deg, rgba(253, 203, 110, 0.15), rgba(253, 203, 110, 0.05));
+            border: 2px solid var(--warning);
             border-radius: 15px;
-            padding: 20px;
-            margin-bottom: 20px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .info-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
+            padding: 20px 25px;
+            margin-bottom: 30px;
+            display: flex;
+            align-items: center;
             gap: 20px;
         }
 
-        @media (max-width: 768px) {
-            .info-grid {
-                grid-template-columns: 1fr;
-            }
+        .policy-banner i {
+            font-size: 30px;
+            color: var(--warning);
         }
 
-        .info-item {
+        .policy-content h3 {
+            color: var(--warning);
+            margin-bottom: 10px;
+        }
+
+        .policy-content ul {
+            list-style: none;
+        }
+
+        .policy-content li {
+            margin: 8px 0;
             display: flex;
-            flex-direction: column;
-            gap: 5px;
+            align-items: center;
+            gap: 10px;
+            color: rgba(255, 255, 255, 0.9);
         }
 
-        .info-label {
-            font-size: 12px;
-            color: rgba(255, 255, 255, 0.6);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        .info-value {
+        .policy-content li i {
             font-size: 16px;
-            font-weight: 600;
-            color: var(--light);
+            color: var(--warning);
         }
 
-        .total-amount {
-            background: rgba(233, 69, 96, 0.1);
-            padding: 25px;
-            border-radius: 15px;
-            text-align: center;
-            margin: 25px 0;
-            border: 1px solid rgba(233, 69, 96, 0.2);
+        .booking-panel {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 30px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
         }
 
-        .total-label {
-            color: rgba(255, 255, 255, 0.6);
-            font-size: 14px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
+        .panel-title {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 25px;
+            padding-bottom: 20px;
+            border-bottom: 2px solid rgba(255, 255, 255, 0.1);
         }
 
-        .total-value {
+        .panel-title i {
+            font-size: 24px;
             color: var(--highlight);
-            font-size: 36px;
-            font-weight: bold;
-            margin-top: 10px;
+            background: rgba(233, 69, 96, 0.2);
+            padding: 12px;
+            border-radius: 12px;
+        }
+
+        .panel-title h3 {
+            font-size: 22px;
+            color: white;
+        }
+
+        .booking-details-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 25px;
+        }
+
+        .detail-item {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
+            transition: all 0.3s;
+            border: 1px solid transparent;
+        }
+
+        .detail-item:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: rgba(233, 69, 96, 0.3);
+            transform: translateX(5px);
+        }
+
+        .detail-icon {
+            width: 50px;
+            height: 50px;
+            background: linear-gradient(135deg, var(--highlight), #ff7675);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .detail-icon i {
+            font-size: 22px;
+            color: white;
+        }
+
+        .detail-content {
+            flex: 1;
+        }
+
+        .detail-label {
+            font-size: 12px;
+            color: #aaa;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 5px;
+        }
+
+        .detail-value {
+            font-size: 18px;
+            font-weight: 600;
+            color: white;
+        }
+
+        .payment-breakdown {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin: 30px 0;
+        }
+
+        .breakdown-item {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .breakdown-item.total {
+            border-color: var(--highlight);
+        }
+
+        .breakdown-item.downpayment {
+            border-color: var(--warning);
+        }
+
+        .breakdown-item.remaining {
+            border-color: var(--info);
+        }
+
+        .breakdown-label {
+            font-size: 12px;
+            color: #aaa;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        .breakdown-value {
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .breakdown-item.total .breakdown-value {
+            color: var(--highlight);
+        }
+
+        .breakdown-item.downpayment .breakdown-value {
+            color: var(--warning);
+        }
+
+        .breakdown-item.remaining .breakdown-value {
+            color: var(--info);
+        }
+
+        .breakdown-note {
+            font-size: 11px;
+            color: #aaa;
+            margin-top: 8px;
         }
 
         .payment-section {
-            background: rgba(255, 255, 255, 0.08);
-            border-radius: 15px;
-            padding: 25px;
-            margin-bottom: 20px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            margin: 30px 0;
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         .section-title {
-            color: var(--light);
-            font-size: 20px;
-            margin-bottom: 20px;
             display: flex;
             align-items: center;
-            gap: 10px;
-        }
-
-        .section-title i {
-            color: var(--highlight);
-        }
-
-        .payment-methods {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 15px;
             margin-bottom: 25px;
         }
 
-        .method-option {
-            background: rgba(255, 255, 255, 0.05);
+        .section-title i {
+            font-size: 24px;
+            color: var(--highlight);
+            background: rgba(233, 69, 96, 0.2);
+            padding: 12px;
+            border-radius: 12px;
+        }
+
+        .section-title h3 {
+            font-size: 22px;
+            color: white;
+        }
+
+        .payment-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+            margin: 25px 0;
+        }
+
+        .payment-card {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
             border: 2px solid rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
-            padding: 20px;
+            border-radius: 16px;
+            padding: 25px 20px;
             text-align: center;
             cursor: pointer;
             transition: all 0.3s;
             position: relative;
             overflow: hidden;
-        }
-
-        .method-option:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
-        }
-
-        .method-option.selected {
-            border-color: var(--highlight);
-            background: rgba(233, 69, 96, 0.1);
-        }
-
-        .method-icon {
-            font-size: 30px;
-            margin-bottom: 10px;
-            height: 50px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .method-name {
-            font-weight: bold;
-            color: var(--light);
-            font-size: 14px;
-        }
-
-        .method-fee {
-            font-size: 12px;
-            color: rgba(255, 255, 255, 0.6);
-            margin-top: 5px;
-        }
-
-        /* Method-specific colors */
-        .method-card .method-icon { color: var(--info); }
-        .method-upi .method-icon { color: var(--purple); }
-        .method-gcash .method-icon { color: var(--gcash); }
-        .method-paymaya .method-icon { color: var(--paymaya); }
-        .method-paypal .method-icon { color: var(--paypal); }
-        .method-bank .method-icon { color: var(--bank); }
-        .method-cash .method-icon { color: var(--success); }
-
-        .payment-form {
-            background: rgba(255, 255, 255, 0.08);
-            border-radius: 15px;
-            padding: 25px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        .form-group {
-            margin-bottom: 20px;
-        }
-
-        label {
-            display: block;
-            color: rgba(255, 255, 255, 0.8);
-            font-size: 14px;
-            margin-bottom: 8px;
-            font-weight: 500;
-        }
-
-        input, select {
             width: 100%;
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 8px;
-            padding: 12px 15px;
-            color: var(--light);
-            font-size: 16px;
-            transition: all 0.2s;
-        }
-
-        input:focus, select:focus {
-            outline: none;
-            border-color: var(--highlight);
-            background: rgba(255, 255, 255, 0.15);
-        }
-
-        .card-details {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-        }
-
-        .bank-details {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-        }
-
-        .method-note {
-            background: rgba(253, 203, 110, 0.1);
-            border: 1px solid rgba(253, 203, 110, 0.2);
-            border-radius: 8px;
-            padding: 15px;
-            margin-top: 20px;
-            color: rgba(255, 255, 255, 0.8);
-            font-size: 14px;
-        }
-
-        .method-note i {
-            color: var(--warning);
-            margin-right: 8px;
-        }
-
-        .pay-btn {
-            width: 100%;
-            background: linear-gradient(135deg, var(--success), #00a085);
-            color: white;
             border: none;
-            padding: 16px;
-            border-radius: 10px;
-            font-size: 18px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            margin-top: 10px;
-            position: relative;
-            overflow: hidden;
         }
 
-        .pay-btn:hover {
-            background: linear-gradient(135deg, #00a085, var(--success));
-            transform: translateY(-2px);
-        }
-
-        .pay-btn.processing {
-            background: linear-gradient(135deg, var(--warning), #e17055);
-            cursor: not-allowed;
-        }
-
-        .pay-btn.processing::after {
+        .payment-card::before {
             content: '';
             position: absolute;
             top: 0;
             left: -100%;
             width: 100%;
             height: 100%;
-            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
-            animation: processing 1.5s infinite;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+            transition: left 0.5s;
         }
 
-        @keyframes processing {
-            0% { left: -100%; }
-            100% { left: 100%; }
+        .payment-card:hover::before {
+            left: 100%;
         }
 
-        .hidden {
-            display: none;
+        .payment-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--highlight);
+            box-shadow: 0 10px 30px rgba(233, 69, 96, 0.3);
         }
 
-        .qr-code {
-            text-align: center;
-            margin: 20px 0;
-            padding: 20px;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 10px;
-        }
+        .payment-card.gcash { --method-color: var(--gcash); }
+        .payment-card.card { --method-color: var(--card); }
+        .payment-card.paymaya { --method-color: var(--paymaya); }
+        .payment-card.store { --method-color: var(--store); }
 
-        .qr-placeholder {
-            width: 200px;
-            height: 200px;
-            background: rgba(255, 255, 255, 0.1);
-            border-radius: 10px;
-            margin: 0 auto 15px;
+        .payment-icon {
+            width: 70px;
+            height: 70px;
+            background: linear-gradient(135deg, var(--method-color), color-mix(in srgb, var(--method-color) 70%, black));
+            border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: rgba(255, 255, 255, 0.3);
+            margin: 0 auto 15px;
+        }
+
+        .payment-icon i {
+            font-size: 30px;
+            color: white;
+        }
+
+        .payment-name {
+            font-size: 18px;
+            font-weight: 600;
+            color: white;
+            margin-bottom: 8px;
+        }
+
+        .payment-desc {
+            font-size: 12px;
+            color: #aaa;
+        }
+
+        .payment-badge {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            margin-top: 10px;
+            color: var(--method-color);
+        }
+
+        .instructions-box {
+            background: rgba(9, 132, 227, 0.1);
+            border: 1px solid var(--info);
+            border-radius: 16px;
+            padding: 25px;
+            margin-top: 30px;
+        }
+
+        .instructions-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .instructions-title i {
+            color: var(--info);
+            font-size: 20px;
+        }
+
+        .instructions-title h4 {
+            color: var(--info);
+            font-size: 16px;
+        }
+
+        .instructions-list {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+        }
+
+        .instruction-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: rgba(255, 255, 255, 0.8);
             font-size: 14px;
         }
 
-        .demo-field {
-            border: 1px dashed rgba(255, 255, 255, 0.3);
-            background: rgba(255, 255, 255, 0.05);
+        .instruction-item i {
+            color: var(--info);
         }
 
-        .demo-field:focus {
-            border: 1px dashed var(--highlight);
+        /* Modal Styles */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            backdrop-filter: blur(8px);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
         }
 
-        .error-message {
-            background: rgba(214, 48, 49, 0.2);
-            border: 1px solid rgba(214, 48, 49, 0.3);
-            border-radius: 10px;
-            padding: 15px;
-            margin: 20px 0;
+        .modal-container {
+            background: var(--secondary);
+            border-radius: 24px;
+            padding: 40px;
+            max-width: 500px;
+            width: 90%;
             text-align: center;
-            color: var(--light);
+            border: 2px solid var(--highlight);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            animation: modalSlideIn 0.3s ease-out;
+            position: relative;
         }
 
-        .error-message i {
-            color: var(--danger);
-            margin-right: 10px;
+        @keyframes modalSlideIn {
+            from {
+                transform: translateY(-30px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .modal-icon {
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, var(--highlight), #ff7675);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 25px;
+        }
+
+        .modal-icon i {
+            font-size: 36px;
+            color: white;
+        }
+
+        .modal-title {
+            font-size: 28px;
+            font-weight: 700;
+            color: white;
+            margin-bottom: 15px;
+        }
+
+        .modal-message {
+            color: #aaa;
+            font-size: 16px;
+            margin-bottom: 25px;
+            line-height: 1.6;
+        }
+
+        .modal-details {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: left;
+        }
+
+        .modal-detail-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .modal-detail-item:last-child {
+            border-bottom: none;
+        }
+
+        .modal-detail-label {
+            color: #aaa;
+            font-size: 14px;
+        }
+
+        .modal-detail-value {
+            color: var(--highlight);
+            font-weight: 600;
+        }
+
+        .modal-buttons {
+            display: flex;
+            gap: 15px;
+            margin-top: 30px;
+        }
+
+        .modal-btn {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .modal-btn-primary {
+            background: linear-gradient(135deg, var(--highlight), #ff4757);
+            color: white;
+        }
+
+        .modal-btn-primary:hover {
+            background: linear-gradient(135deg, #ff4757, var(--highlight));
+            transform: translateY(-2px);
+        }
+
+        .modal-btn-secondary {
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+        }
+
+        .modal-btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.15);
+            transform: translateY(-2px);
+        }
+
+        .modal-btn-store {
+            background: linear-gradient(135deg, var(--store), #00a085);
+            color: white;
+        }
+
+        .modal-btn-store:hover {
+            background: linear-gradient(135deg, #00a085, var(--store));
+            transform: translateY(-2px);
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.1);
+            border: none;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-close:hover {
+            background: rgba(255, 255, 255, 0.2);
+            transform: rotate(90deg);
+        }
+
+        /* Method-specific modal icons */
+        .modal-gcash .modal-icon {
+            background: linear-gradient(135deg, var(--gcash), #0040b0);
+        }
+
+        .modal-card .modal-icon {
+            background: linear-gradient(135deg, var(--card), #5649c0);
+        }
+
+        .modal-paymaya .modal-icon {
+            background: linear-gradient(135deg, var(--paymaya), #cc3d3d);
+        }
+
+        .modal-store .modal-icon {
+            background: linear-gradient(135deg, var(--store), #00a085);
         }
 
         footer {
             text-align: center;
-            padding: 22px;
-            background: rgba(10, 10, 20, 0.95);
+            padding: 30px;
             margin-top: 50px;
             border-top: 1px solid rgba(255, 255, 255, 0.1);
-            font-size: 13px;
-            color: rgba(255, 255, 255, 0.6);
-        }
-
-        footer p {
-            margin-bottom: 8px;
-        }
-
-        .footer-links {
-            display: flex;
-            justify-content: center;
-            gap: 18px;
-            margin-top: 10px;
-        }
-
-        .footer-links a {
-            color: var(--highlight);
-            text-decoration: none;
-            font-size: 12px;
-            transition: all 0.2s;
-        }
-
-        .footer-links a:hover {
-            color: #ff7675;
-            text-decoration: underline;
+            color: #aaa;
         }
 
         @media (max-width: 768px) {
@@ -616,55 +943,259 @@ function validatePayment($method, $data) {
                 flex-direction: column;
                 gap: 15px;
             }
-            
+
             .header-right {
                 flex-direction: column;
                 width: 100%;
             }
-            
+
             .user-info, .back-btn {
                 width: 100%;
                 justify-content: center;
             }
-            
-            .container {
-                padding: 0 15px;
+
+            .booking-details-grid {
+                grid-template-columns: 1fr;
             }
-            
-            .page-header {
-                flex-direction: column;
-                gap: 15px;
-                text-align: center;
-            }
-            
-            .payment-methods {
+
+            .payment-grid {
                 grid-template-columns: repeat(2, 1fr);
             }
-            
-            .card-details, .bank-details {
+
+            .instructions-list {
                 grid-template-columns: 1fr;
+            }
+
+            .payment-breakdown {
+                grid-template-columns: 1fr;
+            }
+
+            .modal-buttons {
+                flex-direction: column;
             }
         }
 
         @media (max-width: 480px) {
-            .payment-methods {
+            .payment-grid {
                 grid-template-columns: 1fr;
             }
+        }
+
+        .error-container {
+            background: rgba(214, 48, 49, 0.2);
+            border: 2px solid var(--danger);
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px;
+            color: var(--danger);
+        }
+
+        .error-container pre {
+            background: rgba(0,0,0,0.3);
+            padding: 10px;
+            border-radius: 5px;
+            margin-top: 10px;
+            white-space: pre-wrap;
+            color: #ff9999;
         }
     </style>
 </head>
 <body>
+    <!-- Store Payment Modal -->
+    <div class="modal-overlay" id="storeModal">
+        <div class="modal-container modal-store">
+            <button class="modal-close" onclick="closeModal('storeModal')">
+                <i class="fas fa-times"></i>
+            </button>
+            <div class="modal-icon">
+                <i class="fas fa-store"></i>
+            </div>
+            <h2 class="modal-title">Confirm Store Payment</h2>
+            <p class="modal-message">Please confirm your store payment details</p>
+            <div class="modal-details">
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Total Amount:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($total_amount, 2); ?></span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Downpayment (20%):</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($downpayment, 2); ?></span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Remaining Balance:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($remaining, 2); ?></span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Booking #:</span>
+                    <span class="modal-detail-value"><?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Room:</span>
+                    <span class="modal-detail-value"><?php echo htmlspecialchars($booking['room_name']); ?></span>
+                </div>
+            </div>
+            <div class="modal-buttons">
+                <form method="POST" style="flex: 1;">
+                    <input type="hidden" name="pay_with_paymongo" value="1">
+                    <input type="hidden" name="payment_method" value="store">
+                    <button type="submit" class="modal-btn modal-btn-store">Confirm & Pay at Store</button>
+                </form>
+                <button class="modal-btn modal-btn-secondary" onclick="closeModal('storeModal')">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GCash Payment Modal -->
+    <div class="modal-overlay" id="gcashModal">
+        <div class="modal-container modal-gcash">
+            <button class="modal-close" onclick="closeModal('gcashModal')">
+                <i class="fas fa-times"></i>
+            </button>
+            <div class="modal-icon">
+                <i class="fas fa-mobile-alt"></i>
+            </div>
+            <h2 class="modal-title">Pay with GCash</h2>
+            <p class="modal-message">You will be redirected to PayMongo secure checkout</p>
+            <div class="modal-details">
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Amount:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($total_amount, 2); ?></span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Payment Method:</span>
+                    <span class="modal-detail-value">GCash</span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Booking #:</span>
+                    <span class="modal-detail-value"><?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Room:</span>
+                    <span class="modal-detail-value"><?php echo htmlspecialchars($booking['room_name']); ?></span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Duration:</span>
+                    <span class="modal-detail-value"><?php echo number_format($hours, 1); ?> hours</span>
+                </div>
+            </div>
+            <div class="modal-buttons">
+                <form method="POST" style="flex: 1;">
+                    <input type="hidden" name="pay_with_paymongo" value="1">
+                    <input type="hidden" name="payment_method" value="gcash">
+                    <button type="submit" class="modal-btn modal-btn-primary">Proceed to PayMongo</button>
+                </form>
+                <button class="modal-btn modal-btn-secondary" onclick="closeModal('gcashModal')">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Card Payment Modal -->
+    <div class="modal-overlay" id="cardModal">
+        <div class="modal-container modal-card">
+            <button class="modal-close" onclick="closeModal('cardModal')">
+                <i class="fas fa-times"></i>
+            </button>
+            <div class="modal-icon">
+                <i class="fas fa-credit-card"></i>
+            </div>
+            <h2 class="modal-title">Pay with Card</h2>
+            <p class="modal-message">You will be redirected to PayMongo secure checkout</p>
+            <div class="modal-details">
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Amount:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($total_amount, 2); ?></span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Payment Method:</span>
+                    <span class="modal-detail-value">Credit/Debit Card</span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Booking #:</span>
+                    <span class="modal-detail-value"><?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Room:</span>
+                    <span class="modal-detail-value"><?php echo htmlspecialchars($booking['room_name']); ?></span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Duration:</span>
+                    <span class="modal-detail-value"><?php echo number_format($hours, 1); ?> hours</span>
+                </div>
+            </div>
+            <div class="modal-buttons">
+                <form method="POST" style="flex: 1;">
+                    <input type="hidden" name="pay_with_paymongo" value="1">
+                    <input type="hidden" name="payment_method" value="card">
+                    <button type="submit" class="modal-btn modal-btn-primary">Proceed to PayMongo</button>
+                </form>
+                <button class="modal-btn modal-btn-secondary" onclick="closeModal('cardModal')">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PayMaya Payment Modal -->
+    <div class="modal-overlay" id="paymayaModal">
+        <div class="modal-container modal-paymaya">
+            <button class="modal-close" onclick="closeModal('paymayaModal')">
+                <i class="fas fa-times"></i>
+            </button>
+            <div class="modal-icon">
+                <i class="fas fa-wallet"></i>
+            </div>
+            <h2 class="modal-title">Pay with PayMaya</h2>
+            <p class="modal-message">You will be redirected to PayMongo secure checkout</p>
+            <div class="modal-details">
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Amount:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($total_amount, 2); ?></span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Payment Method:</span>
+                    <span class="modal-detail-value">PayMaya</span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Booking #:</span>
+                    <span class="modal-detail-value"><?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Room:</span>
+                    <span class="modal-detail-value"><?php echo htmlspecialchars($booking['room_name']); ?></span>
+                </div>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Duration:</span>
+                    <span class="modal-detail-value"><?php echo number_format($hours, 1); ?> hours</span>
+                </div>
+            </div>
+            <div class="modal-buttons">
+                <form method="POST" style="flex: 1;">
+                    <input type="hidden" name="pay_with_paymongo" value="1">
+                    <input type="hidden" name="payment_method" value="paymaya">
+                    <button type="submit" class="modal-btn modal-btn-primary">Proceed to PayMongo</button>
+                </form>
+                <button class="modal-btn modal-btn-secondary" onclick="closeModal('paymayaModal')">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Error Display -->
+    <?php if (isset($error)): ?>
+    <div class="error-container">
+        <i class="fas fa-exclamation-circle"></i> Payment Error
+        <pre><?php echo htmlspecialchars(print_r($error, true)); ?></pre>
+        <p style="margin-top: 10px; font-size: 14px;">Please try again or contact support.</p>
+    </div>
+    <?php endif; ?>
+
     <header>
         <div class="header-left">
-            <h1><i class="fas fa-microphone-alt"></i> Sirene KTV Payment</h1>
-            <p>Complete Payment for Booking #<?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></p>
+            <h1><i class="fas fa-microphone-alt"></i> Sirene KTV</h1>
+            <p>Complete your payment securely</p>
         </div>
         <div class="header-right">
             <div class="user-info">
                 <i class="fas fa-user-circle"></i>
                 <?php echo htmlspecialchars($name); ?> (<?php echo ucfirst($role); ?>)
             </div>
-            
             <a href="booking-details.php?id=<?php echo $booking_id; ?>" class="back-btn">
                 <i class="fas fa-arrow-left"></i> Back to Booking
             </a>
@@ -673,404 +1204,202 @@ function validatePayment($method, $data) {
 
     <div class="container">
         <div class="page-header">
-            <div class="page-title">
-                <h2><i class="fas fa-credit-card"></i> Complete Payment</h2>
-                <p>Choose your preferred payment method</p>
+            <h2>
+                <i class="fas fa-credit-card"></i>
+                Complete Payment
+            </h2>
+            <p>Booking #<?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></p>
+        </div>
+
+        <!-- Live Mode Banner -->
+        <div class="live-banner">
+            <i class="fas fa-check-circle"></i>
+            <div class="live-banner-content">
+                <h3><i class="fas fa-shield-alt"></i> SECURE PAYMENT</h3>
+                <p>Payments are processed securely by PayMongo. We never store your card details.</p>
             </div>
         </div>
-        
-        <?php if (isset($_SESSION['payment_error'])): ?>
-            <div class="error-message">
-                <i class="fas fa-exclamation-triangle"></i>
-                <?php 
-                echo $_SESSION['payment_error'];
-                unset($_SESSION['payment_error']);
-                ?>
-            </div>
-        <?php endif; ?>
-        
-        <div class="demo-notice">
-            <i class="fas fa-vial"></i>
-            <strong>DEMO MODE:</strong> This is a simulated payment system. No real transactions will occur.
-            Use any test data to proceed.
-        </div>
-        
-        <div class="booking-info">
-            <div class="info-grid">
-                <div class="info-item">
-                    <span class="info-label">Booking ID</span>
-                    <span class="info-value">#<?php echo str_pad($booking['b_id'], 6, '0', STR_PAD_LEFT); ?></span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label">Room</span>
-                    <span class="info-value"><?php echo htmlspecialchars($booking['room_name']); ?></span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label">Date</span>
-                    <span class="info-value"><?php echo date('F j, Y', strtotime($booking['booking_date'])); ?></span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label">Time</span>
-                    <span class="info-value">
-                        <?php echo date('g:i A', strtotime($booking['start_time'])); ?> - 
-                        <?php echo date('g:i A', strtotime($booking['end_time'])); ?>
-                    </span>
-                </div>
+
+        <!-- Cancellation Policy Banner -->
+        <div class="policy-banner">
+            <i class="fas fa-exclamation-triangle"></i>
+            <div class="policy-content">
+                <h3><i class="fas fa-gavel"></i> Cancellation Policy</h3>
+                <ul>
+                    <li><i class="fas fa-clock"></i> Cancel up to 24 hours before booking for FULL refund</li>
+                    <li><i class="fas fa-hourglass-half"></i> Cancel within 24 hours: 20% downpayment is non-refundable</li>
+                    <li><i class="fas fa-times-circle"></i> No-show: Full charge applies (₱<?php echo number_format($total_amount, 2); ?>)</li>
+                </ul>
             </div>
         </div>
-        
-        <div class="total-amount">
-            <div class="total-label">Total Amount to Pay</div>
-            <div class="total-value">₹<?php echo number_format($booking['total_amount'], 2); ?></div>
+
+        <!-- Booking Details Panel -->
+        <div class="booking-panel">
+            <div class="panel-title">
+                <i class="fas fa-receipt"></i>
+                <h3>Booking Summary</h3>
+            </div>
+            
+            <div class="booking-details-grid">
+                <div class="detail-item">
+                    <div class="detail-icon">
+                        <i class="fas fa-door-closed"></i>
+                    </div>
+                    <div class="detail-content">
+                        <div class="detail-label">Room</div>
+                        <div class="detail-value"><?php echo htmlspecialchars($booking['room_name']); ?></div>
+                    </div>
+                </div>
+
+                <div class="detail-item">
+                    <div class="detail-icon">
+                        <i class="fas fa-calendar-alt"></i>
+                    </div>
+                    <div class="detail-content">
+                        <div class="detail-label">Date</div>
+                        <div class="detail-value"><?php echo date('l, F j, Y', strtotime($booking['booking_date'])); ?></div>
+                    </div>
+                </div>
+
+                <div class="detail-item">
+                    <div class="detail-icon">
+                        <i class="fas fa-clock"></i>
+                    </div>
+                    <div class="detail-content">
+                        <div class="detail-label">Time</div>
+                        <div class="detail-value">
+                            <?php echo date('g:i A', strtotime($booking['start_time'])); ?> - 
+                            <?php echo date('g:i A', strtotime($booking['end_time'])); ?>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="detail-item">
+                    <div class="detail-icon">
+                        <i class="fas fa-hourglass-half"></i>
+                    </div>
+                    <div class="detail-content">
+                        <div class="detail-label">Duration</div>
+                        <div class="detail-value"><?php echo number_format($hours, 1); ?> hour<?php echo $hours > 1 ? 's' : ''; ?></div>
+                    </div>
+                </div>
+            </div>
         </div>
-        
+
+        <!-- Payment Breakdown -->
+        <div class="payment-breakdown">
+            <div class="breakdown-item total">
+                <div class="breakdown-label">Total Amount</div>
+                <div class="breakdown-value">₱<?php echo number_format($total_amount, 2); ?></div>
+            </div>
+            <div class="breakdown-item downpayment">
+                <div class="breakdown-label">Downpayment (20%)</div>
+                <div class="breakdown-value">₱<?php echo number_format($downpayment, 2); ?></div>
+                <div class="breakdown-note">Non-refundable if cancelled within 24hrs</div>
+            </div>
+            <div class="breakdown-item remaining">
+                <div class="breakdown-label">Remaining Balance</div>
+                <div class="breakdown-value">₱<?php echo number_format($remaining, 2); ?></div>
+                <div class="breakdown-note">Payable at store</div>
+            </div>
+        </div>
+
+        <!-- Payment Methods -->
         <div class="payment-section">
-            <h2 class="section-title"><i class="fas fa-wallet"></i> Select Payment Method</h2>
-            
-            <div class="payment-methods">
-                <div class="method-option method-card selected" onclick="selectPaymentMethod('card')">
-                    <div class="method-icon"><i class="fas fa-credit-card"></i></div>
-                    <div class="method-name">Credit/Debit Card</div>
-                    <div class="method-fee">Demo: Use 4242 4242 4242 4242</div>
+            <div class="section-title">
+                <i class="fas fa-wallet"></i>
+                <h3>Select Payment Method</h3>
+            </div>
+
+            <div class="payment-grid">
+                <!-- GCash -->
+                <div class="payment-card gcash" onclick="showModal('gcashModal')">
+                    <div class="payment-icon">
+                        <i class="fas fa-mobile-alt"></i>
+                    </div>
+                    <h4 class="payment-name">GCash</h4>
+                    <p class="payment-desc">Pay via GCash</p>
+                    <span class="payment-badge">PayMongo</span>
                 </div>
-                
-                <div class="method-option method-upi" onclick="selectPaymentMethod('upi')">
-                    <div class="method-icon"><i class="fas fa-qrcode"></i></div>
-                    <div class="method-name">UPI Payment</div>
-                    <div class="method-fee">Demo: Use test@upi</div>
+
+                <!-- Credit Card -->
+                <div class="payment-card card" onclick="showModal('cardModal')">
+                    <div class="payment-icon">
+                        <i class="fas fa-credit-card"></i>
+                    </div>
+                    <h4 class="payment-name">Credit Card</h4>
+                    <p class="payment-desc">Visa, Mastercard, JCB</p>
+                    <span class="payment-badge">PayMongo</span>
                 </div>
-                
-                <div class="method-option method-gcash" onclick="selectPaymentMethod('gcash')">
-                    <div class="method-icon"><i class="fas fa-mobile-alt"></i></div>
-                    <div class="method-name">G-Cash</div>
-                    <div class="method-fee">Demo: Use 09123456789</div>
+
+                <!-- PayMaya -->
+                <div class="payment-card paymaya" onclick="showModal('paymayaModal')">
+                    <div class="payment-icon">
+                        <i class="fas fa-wallet"></i>
+                    </div>
+                    <h4 class="payment-name">PayMaya</h4>
+                    <p class="payment-desc">Pay via PayMaya</p>
+                    <span class="payment-badge">PayMongo</span>
                 </div>
-                
-                <div class="method-option method-paymaya" onclick="selectPaymentMethod('paymaya')">
-                    <div class="method-icon"><i class="fas fa-mobile-alt"></i></div>
-                    <div class="method-name">PayMaya</div>
-                    <div class="method-fee">Demo: Use 09123456789</div>
+
+                <!-- Pay at Store -->
+                <div class="payment-card store" onclick="showModal('storeModal')">
+                    <div class="payment-icon">
+                        <i class="fas fa-store"></i>
+                    </div>
+                    <h4 class="payment-name">Pay at Store</h4>
+                    <p class="payment-desc">Pay in person</p>
+                    <span class="payment-badge">20% Downpayment</span>
                 </div>
-                
-                <div class="method-option method-paypal" onclick="selectPaymentMethod('paypal')">
-                    <div class="method-icon"><i class="fab fa-paypal"></i></div>
-                    <div class="method-name">PayPal</div>
-                    <div class="method-fee">Demo: Use test@example.com</div>
+            </div>
+
+            <!-- Payment Instructions -->
+            <div class="instructions-box">
+                <div class="instructions-title">
+                    <i class="fas fa-info-circle"></i>
+                    <h4>Payment Instructions</h4>
                 </div>
-                
-                <div class="method-option method-bank" onclick="selectPaymentMethod('bank_transfer')">
-                    <div class="method-icon"><i class="fas fa-university"></i></div>
-                    <div class="method-name">Bank Transfer</div>
-                    <div class="method-fee">Demo: Use test data</div>
-                </div>
-                
-                <div class="method-option method-cash" onclick="selectPaymentMethod('cash')">
-                    <div class="method-icon"><i class="fas fa-money-bill-wave"></i></div>
-                    <div class="method-name">Cash Payment</div>
-                    <div class="method-fee">Simulated on-site payment</div>
+                <div class="instructions-list">
+                    <div class="instruction-item">
+                        <i class="fas fa-mobile-alt"></i>
+                        <span><strong>GCash/PayMaya:</strong> You'll be redirected to PayMongo</span>
+                    </div>
+                    <div class="instruction-item">
+                        <i class="fas fa-credit-card"></i>
+                        <span><strong>Card:</strong> Secure 3D Secure checkout</span>
+                    </div>
+                    <div class="instruction-item">
+                        <i class="fas fa-store"></i>
+                        <span><strong>Store:</strong> Pay 20% downpayment at store</span>
+                    </div>
+                    <div class="instruction-item">
+                        <i class="fas fa-clock"></i>
+                        <span><strong>Booking #:</strong> <?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></span>
+                    </div>
                 </div>
             </div>
         </div>
-        
-        <form method="POST" class="payment-form" id="paymentForm" onsubmit="return processPayment(event)">
-            <input type="hidden" name="payment_method" id="paymentMethod" value="card">
-            
-            <!-- Card Payment Fields -->
-            <div id="cardFields">
-                <h2 class="section-title"><i class="fas fa-credit-card"></i> Card Details (Demo)</h2>
-                <div class="form-group">
-                    <label for="card_number">Card Number (Test: 4242 4242 4242 4242)</label>
-                    <input type="text" id="card_number" name="card_number" placeholder="4242 4242 4242 4242" maxlength="19" class="demo-field" value="4242 4242 4242 4242" required>
-                </div>
-                
-                <div class="card-details">
-                    <div class="form-group">
-                        <label for="expiry_date">Expiry Date (Any future date)</label>
-                        <input type="text" id="expiry_date" name="expiry_date" placeholder="12/28" maxlength="5" class="demo-field" value="12/28" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="cvv">CVV (Any 3 digits)</label>
-                        <input type="password" id="cvv" name="cvv" placeholder="123" maxlength="3" class="demo-field" value="123" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="card_name">Name on Card</label>
-                        <input type="text" id="card_name" name="card_name" placeholder="John Doe" class="demo-field" value="Demo Customer" required>
-                    </div>
-                </div>
-            </div>
-            
-            <!-- UPI Payment Fields -->
-            <div id="upiFields" class="hidden">
-                <h2 class="section-title"><i class="fas fa-qrcode"></i> UPI Payment (Demo)</h2>
-                <div class="qr-code">
-                    <div class="qr-placeholder">
-                        <i class="fas fa-qrcode fa-3x"></i>
-                    </div>
-                    <p>Demo QR Code - Simulated Payment</p>
-                </div>
-                <div class="form-group">
-                    <label for="upi_id">UPI ID (Demo: test@upi)</label>
-                    <input type="text" id="upi_id" name="upi_id" placeholder="test@upi" class="demo-field" value="test@upi" required>
-                </div>
-                <div class="method-note">
-                    <i class="fas fa-info-circle"></i>
-                    This is a simulated UPI payment. No actual transaction will occur.
-                </div>
-            </div>
-            
-            <!-- G-Cash Payment Fields -->
-            <div id="gcashFields" class="hidden">
-                <h2 class="section-title"><i class="fas fa-mobile-alt"></i> G-Cash Payment (Demo)</h2>
-                <div class="qr-code">
-                    <div class="qr-placeholder" style="background: var(--gcash);">
-                        <i class="fas fa-mobile-alt fa-3x"></i>
-                    </div>
-                    <p>Demo G-Cash QR - Simulated Payment</p>
-                </div>
-                <div class="form-group">
-                    <label for="gcash_number">G-Cash Mobile Number (Demo: 09123456789)</label>
-                    <input type="tel" id="gcash_number" name="gcash_number" placeholder="09123456789" class="demo-field" value="09123456789" required>
-                </div>
-                <div class="method-note">
-                    <i class="fas fa-info-circle"></i>
-                    This is a simulated G-Cash payment. No actual transaction will occur.
-                </div>
-            </div>
-            
-            <!-- PayMaya Payment Fields -->
-            <div id="paymayaFields" class="hidden">
-                <h2 class="section-title"><i class="fas fa-mobile-alt"></i> PayMaya Payment (Demo)</h2>
-                <div class="qr-code">
-                    <div class="qr-placeholder" style="background: var(--paymaya);">
-                        <i class="fas fa-wallet fa-3x"></i>
-                    </div>
-                    <p>Demo PayMaya QR - Simulated Payment</p>
-                </div>
-                <div class="form-group">
-                    <label for="paymaya_number">PayMaya Account Number (Demo: 09123456789)</label>
-                    <input type="tel" id="paymaya_number" name="paymaya_number" placeholder="09123456789" class="demo-field" value="09123456789" required>
-                </div>
-                <div class="method-note">
-                    <i class="fas fa-info-circle"></i>
-                    This is a simulated PayMaya payment. No actual transaction will occur.
-                </div>
-            </div>
-            
-            <!-- PayPal Payment Fields -->
-            <div id="paypalFields" class="hidden">
-                <h2 class="section-title"><i class="fab fa-paypal"></i> PayPal Payment (Demo)</h2>
-                <div class="form-group">
-                    <label for="paypal_email">PayPal Email Address (Demo: test@example.com)</label>
-                    <input type="email" id="paypal_email" name="paypal_email" placeholder="test@example.com" class="demo-field" value="test@example.com" required>
-                </div>
-                <div class="method-note">
-                    <i class="fas fa-info-circle"></i>
-                    This is a simulated PayPal payment. You will not be redirected to PayPal.
-                </div>
-            </div>
-            
-            <!-- Bank Transfer Fields -->
-            <div id="bankFields" class="hidden">
-                <h2 class="section-title"><i class="fas fa-university"></i> Bank Transfer (Demo)</h2>
-                <div class="form-group">
-                    <label for="bank_name">Bank Name</label>
-                    <select id="bank_name" name="bank_name" class="demo-field" required>
-                        <option value="">Select Bank</option>
-                        <option value="Demo Bank" selected>Demo Bank (Test)</option>
-                        <option value="BDO">BDO Unibank</option>
-                        <option value="BPI">BPI</option>
-                        <option value="Metrobank">Metrobank</option>
-                        <option value="UnionBank">UnionBank</option>
-                    </select>
-                </div>
-                
-                <div class="bank-details">
-                    <div class="form-group">
-                        <label for="account_name">Account Name (Demo: Test Customer)</label>
-                        <input type="text" id="account_name" name="account_name" placeholder="Test Customer" class="demo-field" value="Test Customer" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label for="account_number">Account Number (Demo: 1234567890)</label>
-                        <input type="text" id="account_number" name="account_number" placeholder="1234567890" class="demo-field" value="1234567890" required>
-                    </div>
-                </div>
-                
-                <div class="method-note">
-                    <i class="fas fa-info-circle"></i>
-                    This is a simulated bank transfer. No actual funds will be transferred.<br>
-                    <strong>Demo Bank Details:</strong> Account: 123-456-789-0, Swift Code: DEMO123
-                </div>
-            </div>
-            
-            <!-- Cash Payment Fields -->
-            <div id="cashFields" class="hidden">
-                <h2 class="section-title"><i class="fas fa-money-bill-wave"></i> Cash Payment (Simulated)</h2>
-                <div class="method-note" style="background: rgba(0, 184, 148, 0.1); border-color: rgba(0, 184, 148, 0.2);">
-                    <i class="fas fa-check-circle"></i>
-                    <strong>Simulated Cash Payment:</strong><br>
-                    1. This simulates paying cash on arrival<br>
-                    2. Your booking will be marked as "paid" in the system<br>
-                    3. No actual cash transaction occurs<br>
-                    4. You can proceed to payment success page
-                </div>
-            </div>
-            
-            <button type="submit" class="pay-btn" id="payButton">
-                <i class="fas fa-lock"></i> 
-                <span id="payButtonText">Simulate Payment ₹<?php echo number_format($booking['total_amount'], 2); ?></span>
-            </button>
-        </form>
     </div>
 
     <footer>
-        <p>&copy; 2024 Sirene KTV. All Rights Reserved.</p>
-        <div class="footer-links">
-            <a href="dashboard.php">Dashboard</a>
-            <a href="my-bookings.php">My Bookings</a>
-            <a href="#">Help</a>
-            <a href="#">Contact</a>
-        </div>
+        <p>&copy; 2024 Sirene KTV. All Rights Reserved. Payments powered by PayMongo.</p>
     </footer>
 
+    <!-- JavaScript for modals -->
     <script>
-        let currentMethod = 'card';
-        
-        function selectPaymentMethod(method) {
-            currentMethod = method;
-            
-            // Update selected method UI
-            document.querySelectorAll('.method-option').forEach(option => {
-                option.classList.remove('selected');
-            });
-            event.target.closest('.method-option').classList.add('selected');
-            
-            // Update hidden input
-            document.getElementById('paymentMethod').value = method;
-            
-            // Hide all form fields
-            const allFields = ['cardFields', 'upiFields', 'gcashFields', 'paymayaFields', 'paypalFields', 'bankFields', 'cashFields'];
-            allFields.forEach(fieldId => {
-                document.getElementById(fieldId).classList.add('hidden');
-            });
-            
-            // Show selected method fields
-            document.getElementById(method + 'Fields').classList.remove('hidden');
-            
-            // Update button text
-            const payButton = document.getElementById('payButton');
-            const payButtonText = document.getElementById('payButtonText');
-            
-            if (method === 'cash') {
-                payButton.style.background = 'linear-gradient(135deg, var(--warning), #e17055)';
-                payButtonText.innerHTML = '<i class="fas fa-check"></i> Simulate Cash Payment';
-            } else {
-                payButton.style.background = 'linear-gradient(135deg, var(--success), #00a085)';
-                payButtonText.innerHTML = '<i class="fas fa-lock"></i> Simulate Payment ₹<?php echo number_format($booking['total_amount'], 2); ?>';
-            }
+    function showModal(modalId) {
+        document.getElementById(modalId).style.display = 'flex';
+    }
+
+    function closeModal(modalId) {
+        document.getElementById(modalId).style.display = 'none';
+    }
+
+    window.addEventListener('click', function(event) {
+        if (event.target.classList.contains('modal-overlay')) {
+            event.target.style.display = 'none';
         }
-        
-        function processPayment(event) {
-            event.preventDefault();
-            
-            const form = event.target;
-            const submitButton = form.querySelector('#payButton');
-            const buttonText = submitButton.querySelector('#payButtonText');
-            
-            // Show processing state
-            submitButton.classList.add('processing');
-            buttonText.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing Simulation...';
-            submitButton.disabled = true;
-            
-            // Simulate payment processing delay
-            setTimeout(() => {
-                // Submit the form after simulation
-                form.submit();
-            }, 2000); // 2 second simulation
-            
-            return false; // Prevent default submission
-        }
-        
-        document.addEventListener('DOMContentLoaded', function() {
-            // Auto-fill demo data based on method
-            function autoFillDemoData(method) {
-                const demoData = {
-                    card: {
-                        card_number: '4242 4242 4242 4242',
-                        expiry_date: '12/28',
-                        cvv: '123',
-                        card_name: 'Demo Customer'
-                    },
-                    upi: {
-                        upi_id: 'test@upi'
-                    },
-                    gcash: {
-                        gcash_number: '09123456789'
-                    },
-                    paymaya: {
-                        paymaya_number: '09123456789'
-                    },
-                    paypal: {
-                        paypal_email: 'test@example.com'
-                    },
-                    bank_transfer: {
-                        bank_name: 'Demo Bank',
-                        account_name: 'Test Customer',
-                        account_number: '1234567890'
-                    }
-                };
-                
-                if (demoData[method]) {
-                    Object.entries(demoData[method]).forEach(([field, value]) => {
-                        const input = document.querySelector(`[name="${field}"]`);
-                        if (input) {
-                            input.value = value;
-                        }
-                    });
-                }
-            }
-            
-            // Format card number
-            document.getElementById('card_number').addEventListener('input', function(e) {
-                let value = e.target.value.replace(/\s+/g, '').replace(/[^0-9]/gi, '');
-                let formatted = value.replace(/(\d{4})/g, '$1 ').trim();
-                e.target.value = formatted.substring(0, 19);
-            });
-            
-            // Format expiry date
-            document.getElementById('expiry_date').addEventListener('input', function(e) {
-                let value = e.target.value.replace(/[^0-9]/g, '');
-                if (value.length >= 2) {
-                    value = value.substring(0, 2) + '/' + value.substring(2, 4);
-                }
-                e.target.value = value.substring(0, 5);
-            });
-            
-            // Auto-fill demo data when method changes
-            document.querySelectorAll('.method-option').forEach(option => {
-                option.addEventListener('click', function() {
-                    const method = this.classList[1].replace('method-', '');
-                    autoFillDemoData(method);
-                });
-            });
-            
-            // Initial auto-fill
-            autoFillDemoData('card');
-            
-            // Add page load animation
-            const sections = document.querySelectorAll('.payment-section, .booking-info, .payment-form');
-            sections.forEach((section, index) => {
-                section.style.opacity = '0';
-                section.style.transform = 'translateY(20px)';
-                setTimeout(() => {
-                    section.style.transition = 'opacity 0.5s, transform 0.5s';
-                    section.style.opacity = '1';
-                    section.style.transform = 'translateY(0)';
-                }, index * 100);
-            });
-        });
+    });
     </script>
 </body>
 </html>

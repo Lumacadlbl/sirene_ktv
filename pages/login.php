@@ -2,6 +2,31 @@
 session_start();
 include "../db.php";
 
+// Helper function to get currency based on country code (ADD THIS FUNCTION)
+function getCurrencyFromCountry($country_code) {
+    $currencies = [
+        '+1' => ['symbol' => '$', 'code' => 'USD', 'name' => 'US Dollar'],
+        '+44' => ['symbol' => '£', 'code' => 'GBP', 'name' => 'British Pound'],
+        '+61' => ['symbol' => 'A$', 'code' => 'AUD', 'name' => 'Australian Dollar'],
+        '+65' => ['symbol' => 'S$', 'code' => 'SGD', 'name' => 'Singapore Dollar'],
+        '+60' => ['symbol' => 'RM', 'code' => 'MYR', 'name' => 'Malaysian Ringgit'],
+        '+63' => ['symbol' => '₱', 'code' => 'PHP', 'name' => 'Philippine Peso'], // Philippines Peso
+        '+81' => ['symbol' => '¥', 'code' => 'JPY', 'name' => 'Japanese Yen'],
+        '+82' => ['symbol' => '₩', 'code' => 'KRW', 'name' => 'South Korean Won'],
+        '+86' => ['symbol' => '¥', 'code' => 'CNY', 'name' => 'Chinese Yuan'],
+        '+91' => ['symbol' => '₹', 'code' => 'INR', 'name' => 'Indian Rupee'],
+        '+971' => ['symbol' => 'د.إ', 'code' => 'AED', 'name' => 'UAE Dirham'],
+        '+33' => ['symbol' => '€', 'code' => 'EUR', 'name' => 'Euro'],
+        '+49' => ['symbol' => '€', 'code' => 'EUR', 'name' => 'Euro'],
+        '+34' => ['symbol' => '€', 'code' => 'EUR', 'name' => 'Euro'],
+        '+39' => ['symbol' => '€', 'code' => 'EUR', 'name' => 'Euro'],
+        '+55' => ['symbol' => 'R$', 'code' => 'BRL', 'name' => 'Brazilian Real'],
+        '+52' => ['symbol' => 'Mex$', 'code' => 'MXN', 'name' => 'Mexican Peso']
+    ];
+    
+    return $currencies[$country_code] ?? ['symbol' => '$', 'code' => 'USD', 'name' => 'US Dollar'];
+}
+
 $message = "";
 
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
@@ -23,6 +48,12 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $_SESSION["user_id"] = $user["id"];
             $_SESSION["name"]    = $user["name"];
             $_SESSION["role"]    = $user["role"];
+            
+            // ADD THESE LINES - Store country and currency in session
+            $_SESSION["user_country_code"] = $user["country_code"] ?? '+1'; // Default to US if not set
+            $_SESSION["user_currency"] = getCurrencyFromCountry($user["country_code"] ?? '+1');
+            
+            // Also store in localStorage via JavaScript (we'll add this in the script section)
             
             // Redirect based on role
             if ($user["role"] === "admin") {
@@ -48,7 +79,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     <title>Login | Sirene KTV</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* Your existing CSS styles here */
+        /* Your existing CSS styles here - keep them exactly as they are */
         :root {
             --primary: #1a1a2e;
             --secondary: #16213e;

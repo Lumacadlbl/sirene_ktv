@@ -62,9 +62,94 @@ if (isset($_GET['delete_extra'])) {
 
 if (isset($_GET['delete_booking'])) {
     $id = (int)$_GET['delete_booking'];
+    
+    // First delete related food orders
+    $conn->query("DELETE FROM booking_food WHERE b_id=$id");
+    // Then delete the booking
     $conn->query("DELETE FROM booking WHERE b_id=$id");
+    
     $_SESSION['success'] = "Booking deleted successfully!";
     header("Location: admindash.php");
+    exit;
+}
+
+// Delete food order from booking_food
+if (isset($_GET['delete_booking_food'])) {
+    $id = (int)$_GET['delete_booking_food'];
+    $bf_id = $id;
+    
+    // Get booking and food info before deleting
+    $order_info = $conn->query("SELECT bf.*, f.price, f.stock as current_stock FROM booking_food bf JOIN food_beverages f ON bf.f_id = f.f_id WHERE bf.bf_id = $bf_id")->fetch_assoc();
+    
+    if ($order_info) {
+        $b_id = $order_info['b_id'];
+        $f_id = $order_info['f_id'];
+        $quantity = $order_info['quantity'];
+        $total_to_deduct = $order_info['quantity'] * $order_info['price'];
+        
+        // Delete the order
+        $conn->query("DELETE FROM booking_food WHERE bf_id=$bf_id");
+        
+        // Update stock - add back the quantity
+        $conn->query("UPDATE food_beverages SET stock = stock + $quantity WHERE f_id = $f_id");
+        
+        // Update booking total
+        $conn->query("UPDATE booking SET total_amount = total_amount - $total_to_deduct WHERE b_id = $b_id");
+        
+        $_SESSION['success'] = "Food item removed from order successfully!";
+    } else {
+        $_SESSION['error'] = "Order item not found!";
+    }
+    
+    header("Location: admindash.php#food-orders");
+    exit;
+}
+
+// Delete entire food order (all items for a booking)
+if (isset($_GET['delete_whole_order'])) {
+    $b_id = (int)$_GET['delete_whole_order'];
+    
+    // Get all food items for this booking to restore stock
+    $food_items = $conn->query("SELECT bf.*, f.stock as current_stock FROM booking_food bf JOIN food_beverages f ON bf.f_id = f.f_id WHERE bf.b_id = $b_id");
+    
+    $total_deduct = 0;
+    while ($item = $food_items->fetch_assoc()) {
+        $quantity = $item['quantity'];
+        $f_id = $item['f_id'];
+        
+        // Restore stock for each item
+        $conn->query("UPDATE food_beverages SET stock = stock + $quantity WHERE f_id = $f_id");
+        $total_deduct += $item['quantity'] * $item['price'];
+    }
+    
+    // Delete all food items for this booking
+    $conn->query("DELETE FROM booking_food WHERE b_id=$b_id");
+    
+    // Update booking total (remove food amount)
+    $conn->query("UPDATE booking SET total_amount = total_amount - $total_deduct WHERE b_id = $b_id");
+    
+    $_SESSION['success'] = "Complete food order for Booking #$b_id has been deleted!";
+    header("Location: admindash.php#food-orders");
+    exit;
+}
+
+// ===== UPDATE FOOD ORDER SERVED STATUS (WHOLE ORDER) =====
+if (isset($_POST['update_food_order_status'])) {
+    $b_id = (int)$_POST['b_id'];
+    $served_status = $_POST['served_status'];
+    
+    // Update all food items in this booking with the same status
+    $stmt = $conn->prepare("UPDATE booking_food SET served = ? WHERE b_id = ?");
+    $stmt->bind_param("si", $served_status, $b_id);
+    
+    if ($stmt->execute()) {
+        $_SESSION['success'] = "Food order status for Booking #$b_id updated to: $served_status";
+    } else {
+        $_SESSION['error'] = "Failed to update food order status: " . $conn->error;
+    }
+    
+    $stmt->close();
+    header("Location: admindash.php#food-orders");
     exit;
 }
 
@@ -104,6 +189,46 @@ if (isset($_POST['add_extra'])) {
     exit;
 }
 
+// Add food item to booking_food
+if (isset($_POST['add_booking_food'])) {
+    $b_id = (int)$_POST['b_id'];
+    $f_id = (int)$_POST['f_id'];
+    $quantity = (int)$_POST['quantity'];
+    
+    // Get food price and check stock
+    $food_result = $conn->query("SELECT price, item_name, stock FROM food_beverages WHERE f_id = $f_id");
+    $food = $food_result->fetch_assoc();
+    $price = $food['price'];
+    $total = $price * $quantity;
+    $current_stock = $food['stock'];
+    
+    if ($current_stock >= $quantity) {
+        // Insert into booking_food with served status default 'pending'
+        $served = 'pending';
+        $stmt = $conn->prepare("INSERT INTO booking_food (b_id, f_id, quantity, price, served) VALUES (?, ?, ?, ?, ?)");
+        $stmt->bind_param("iiids", $b_id, $f_id, $quantity, $price, $served);
+        
+        if ($stmt->execute()) {
+            // Update stock
+            $new_stock = $current_stock - $quantity;
+            $conn->query("UPDATE food_beverages SET stock = $new_stock WHERE f_id = $f_id");
+            
+            // Update booking total
+            $conn->query("UPDATE booking SET total_amount = total_amount + $total WHERE b_id = $b_id");
+            
+            $_SESSION['success'] = "Food item added to order successfully!";
+        } else {
+            $_SESSION['error'] = "Failed to add food item: " . $conn->error;
+        }
+        $stmt->close();
+    } else {
+        $_SESSION['error'] = "Insufficient stock! Available: $current_stock";
+    }
+    
+    header("Location: admindash.php#food-orders");
+    exit;
+}
+
 // ===== UPDATE operations =====
 if (isset($_POST['update_room'])) {
     $room_id = $_POST['room_id'];
@@ -140,13 +265,10 @@ if (isset($_POST['update_food'])) {
     exit;
 }
 
-// ===== BOOKING STATUS UPDATE - SIMPLIFIED VERSION =====
+// ===== BOOKING STATUS UPDATE =====
 if (isset($_POST['update_booking_status'])) {
     $b_id = (int)$_POST['b_id'];
     $status = trim($_POST['status']);
-    
-    // Debug output
-    error_log("UPDATE BOOKING STATUS: ID=$b_id, Status=$status");
     
     // Determine payment status based on booking status
     $payment_status = 'pending';
@@ -254,13 +376,19 @@ if ($food_count == 0) {
     }
 }
 
+// Check if 'served' column exists in booking_food table, if not add it
+$check_column = $conn->query("SHOW COLUMNS FROM booking_food LIKE 'served'");
+if ($check_column->num_rows == 0) {
+    $conn->query("ALTER TABLE booking_food ADD COLUMN served ENUM('pending', 'served', 'cancelled') DEFAULT 'pending'");
+}
+
 // ===== FETCH data =====
 $users = $conn->query("SELECT * FROM user_tbl ORDER BY id DESC");
 $rooms = $conn->query("SELECT * FROM room ORDER BY r_id DESC");
 $foods = $conn->query("SELECT * FROM food_beverages ORDER BY category, item_name ASC");
 $extras = $conn->query("SELECT * FROM extra_expense ORDER BY e_id DESC");
 $bookings = $conn->query("
-    SELECT b.*, u.name as user_name, r.room_name 
+    SELECT b.*, u.name as user_name, u.id as user_id, r.room_name 
     FROM booking b 
     JOIN user_tbl u ON b.u_id = u.id 
     JOIN room r ON b.r_id = r.r_id 
@@ -280,6 +408,41 @@ $approved_bookings = $conn->query("SELECT COUNT(*) as count FROM booking WHERE s
 $today_bookings = $conn->query("SELECT COUNT(*) as count FROM booking WHERE DATE(booking_date) = CURDATE()")->fetch_assoc()['count'];
 $total_revenue = $conn->query("SELECT SUM(total_amount) as total FROM booking WHERE status = 'Completed'")->fetch_assoc()['total'];
 $total_revenue = $total_revenue ? $total_revenue : 0;
+
+// Get all food orders for bookings using booking_food table
+$food_orders = [];
+$bookings_with_food_count = 0; // Counter for bookings that have food items
+$orders_result = $conn->query("
+    SELECT bf.*, f.item_name, f.category, b.b_id, r.room_name, u.name as user_name,
+           b.booking_date, b.start_time, b.end_time, b.total_amount
+    FROM booking_food bf 
+    JOIN food_beverages f ON bf.f_id = f.f_id 
+    JOIN booking b ON bf.b_id = b.b_id
+    JOIN room r ON b.r_id = r.r_id
+    JOIN user_tbl u ON b.u_id = u.id
+    ORDER BY bf.bf_id DESC
+");
+
+$unique_bookings = [];
+while ($row = $orders_result->fetch_assoc()) {
+    $food_orders[$row['b_id']][] = $row;
+    if (!in_array($row['b_id'], $unique_bookings)) {
+        $unique_bookings[] = $row['b_id'];
+        $bookings_with_food_count++;
+    }
+}
+
+// Get order status for each booking (all items should have same status ideally, but we'll check)
+$booking_statuses = [];
+foreach ($food_orders as $b_id => $items) {
+    $statuses = array_column($items, 'served');
+    $unique_statuses = array_unique($statuses);
+    if (count($unique_statuses) == 1) {
+        $booking_statuses[$b_id] = $items[0]['served']; // All items have same status
+    } else {
+        $booking_statuses[$b_id] = 'mixed'; // Mixed statuses
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -291,16 +454,31 @@ $total_revenue = $total_revenue ? $total_revenue : 0;
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
 :root {
-    --primary: #1a1a2e;
-    --secondary: #16213e;
-    --accent: #0f3460;
-    --highlight: #e94560;
-    --light: #f5f5f5;
-    --dark: #0d1117;
-    --success: #00b894;
-    --warning: #fdcb6e;
-    --danger: #d63031;
-    --info: #0984e3;
+    --primary: #0f172a;        /* Dark blue - main background */
+    --secondary: #1e293b;      /* Slightly lighter blue - cards/sidebar */
+    --accent: #334155;         /* Medium blue - borders/hover states */
+    --highlight: #f43f5e;      /* Rose/red - primary accent */
+    --highlight-light: #fb7185; /* Light rose - hover states */
+    --success: #10b981;        /* Emerald green - success states */
+    --info: #3b82f6;           /* Blue - info/primary buttons */
+    --warning: #f59e0b;        /* Amber - warning states */
+    --danger: #ef4444;         /* Red - delete/danger states */
+    --purple: #8b5cf6;         /* Purple - special/featured items */
+    --light: #f8fafc;          /* Off-white - text */
+    --light-dim: #94a3b8;      /* Dimmed white - secondary text */
+    --dark: #020617;           /* Almost black - deep accents */
+    
+    /* Status colors */
+    --served: #10b981;         /* Emerald - served items */
+    --pending: #f59e0b;        /* Amber - pending items */
+    --cancelled: #64748b;      /* Slate - cancelled items (neutral) */
+    --mixed: #8b5cf6;          /* Purple - mixed status */
+    
+    /* Order section specific */
+    --order-bg: #1e293b;       /* Secondary background */
+    --order-item: #2d3a4f;     /* Item background */
+    --order-accent: #f43f5e;   /* Rose accent */
+    --order-highlight: #fb7185; /* Light rose */
 }
 
 * {
@@ -311,13 +489,13 @@ $total_revenue = $total_revenue ? $total_revenue : 0;
 
 body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    background: linear-gradient(135deg, var(--primary), var(--secondary));
+    background: linear-gradient(135deg, var(--primary), #0b1120);
     color: var(--light);
     min-height: 100vh;
 }
 
 header {
-    background: rgba(10, 10, 20, 0.95);
+    background: rgba(15, 23, 42, 0.95);
     padding: 20px 40px;
     display: flex;
     justify-content: space-between;
@@ -328,7 +506,7 @@ header {
 
 .header-left h1 {
     font-size: 28px;
-    background: linear-gradient(90deg, var(--highlight), #ff7675);
+    background: linear-gradient(90deg, var(--highlight), #818cf8);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
@@ -336,7 +514,7 @@ header {
 }
 
 .header-left p {
-    color: #aaa;
+    color: var(--light-dim);
     font-size: 14px;
 }
 
@@ -351,10 +529,11 @@ header {
     padding: 8px 15px;
     border-radius: 20px;
     font-size: 14px;
+    color: var(--light);
 }
 
 .logout-btn {
-    background: linear-gradient(135deg, var(--highlight), #ff4757);
+    background: linear-gradient(135deg, var(--highlight), #ef4444);
     color: white;
     border: none;
     padding: 10px 25px;
@@ -368,9 +547,9 @@ header {
 }
 
 .logout-btn:hover {
-    background: linear-gradient(135deg, #ff4757, var(--highlight));
+    background: linear-gradient(135deg, #ef4444, var(--highlight));
     transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(233, 69, 96, 0.4);
+    box-shadow: 0 5px 15px rgba(244, 63, 94, 0.4);
 }
 
 /* Dashboard Container */
@@ -382,9 +561,14 @@ header {
 /* Sidebar */
 .sidebar {
     width: 250px;
-    background: rgba(22, 33, 62, 0.9);
+    background: rgba(30, 41, 59, 0.9);
     padding: 25px 15px;
     box-shadow: 5px 0 15px rgba(0, 0, 0, 0.2);
+    position: sticky;
+    top: 0;
+    height: calc(100vh - 100px);
+    overflow-y: auto;
+    backdrop-filter: blur(10px);
 }
 
 .sidebar-title {
@@ -415,14 +599,15 @@ header {
 }
 
 .menu-item:hover {
-    background: rgba(233, 69, 96, 0.1);
-    color: var(--highlight);
+    background: rgba(244, 63, 94, 0.1);
+    color: var(--highlight-light);
     transform: translateX(5px);
 }
 
 .menu-item.active {
-    background: var(--highlight);
+    background: linear-gradient(135deg, var(--highlight), var(--highlight-light));
     color: white;
+    box-shadow: 0 4px 12px rgba(244, 63, 94, 0.3);
 }
 
 .menu-item i {
@@ -432,11 +617,21 @@ header {
 
 .menu-item.booking {
     margin-top: 20px;
-    background: rgba(233, 69, 96, 0.1);
+    background: rgba(59, 130, 246, 0.1);
 }
 
 .menu-item.booking.active {
-    background: var(--highlight);
+    background: linear-gradient(135deg, var(--info), #60a5fa);
+}
+
+.menu-item.food-orders {
+    background: rgba(139, 92, 246, 0.1);
+    color: var(--purple);
+}
+
+.menu-item.food-orders.active {
+    background: linear-gradient(135deg, var(--purple), #a78bfa);
+    color: white;
 }
 
 /* Main Content */
@@ -497,8 +692,9 @@ header {
 }
 
 .add-btn:hover {
-    background: #00a085;
+    background: #0ca678;
     transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
 }
 
 /* Stats Cards */
@@ -510,16 +706,17 @@ header {
 }
 
 .stat-card {
-    background: rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.05);
     padding: 20px;
     border-radius: 15px;
     text-align: center;
     transition: all 0.3s;
     border-left: 5px solid var(--highlight);
+    backdrop-filter: blur(5px);
 }
 
 .stat-card:hover {
-    background: rgba(255, 255, 255, 0.12);
+    background: rgba(255, 255, 255, 0.08);
     transform: translateY(-5px);
 }
 
@@ -532,10 +729,11 @@ header {
 .stat-card h3 {
     font-size: 32px;
     margin: 10px 0;
+    color: var(--light);
 }
 
 .stat-card p {
-    color: #aaa;
+    color: var(--light-dim);
     font-size: 14px;
 }
 
@@ -553,6 +751,7 @@ header {
     border-radius: 10px;
     text-align: center;
     border-left: 4px solid var(--highlight);
+    backdrop-filter: blur(5px);
 }
 
 .stat-box h4 {
@@ -563,7 +762,7 @@ header {
 
 .stat-box p {
     font-size: 12px;
-    color: #aaa;
+    color: var(--light-dim);
 }
 
 /* Tables */
@@ -573,6 +772,7 @@ header {
     overflow: hidden;
     margin-top: 20px;
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(5px);
 }
 
 table {
@@ -595,6 +795,7 @@ th {
 td {
     padding: 15px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    color: var(--light);
 }
 
 tbody tr {
@@ -602,7 +803,7 @@ tbody tr {
 }
 
 tbody tr:hover {
-    background: rgba(233, 69, 96, 0.05);
+    background: rgba(244, 63, 94, 0.05);
 }
 
 .action-buttons {
@@ -610,7 +811,7 @@ tbody tr:hover {
     gap: 8px;
 }
 
-.btn-edit, .btn-delete, .btn-view {
+.btn-edit, .btn-delete, .btn-view, .btn-food, .btn-served {
     padding: 6px 12px;
     border-radius: 5px;
     border: none;
@@ -624,7 +825,7 @@ tbody tr:hover {
 }
 
 .btn-edit {
-    background: rgba(9, 132, 227, 0.2);
+    background: rgba(59, 130, 246, 0.15);
     color: var(--info);
 }
 
@@ -634,7 +835,7 @@ tbody tr:hover {
 }
 
 .btn-delete {
-    background: rgba(214, 48, 49, 0.2);
+    background: rgba(239, 68, 68, 0.15);
     color: var(--danger);
 }
 
@@ -644,13 +845,375 @@ tbody tr:hover {
 }
 
 .btn-view {
-    background: rgba(0, 184, 148, 0.2);
+    background: rgba(16, 185, 129, 0.15);
     color: var(--success);
 }
 
 .btn-view:hover {
     background: var(--success);
     color: white;
+}
+
+.btn-food {
+    background: rgba(139, 92, 246, 0.15);
+    color: var(--purple);
+}
+
+.btn-food:hover {
+    background: var(--purple);
+    color: white;
+}
+
+.btn-served {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--served);
+}
+
+.btn-served:hover {
+    background: var(--served);
+    color: white;
+}
+
+/* Food Orders Section - Updated with new color scheme */
+.food-orders-section {
+    margin-top: 40px;
+    padding-top: 20px;
+    border-top: 2px dashed var(--order-accent);
+}
+
+.food-orders-section h3 {
+    color: var(--light);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 26px;
+}
+
+.food-orders-section h3 i {
+    background: linear-gradient(135deg, var(--purple), var(--info));
+    color: white;
+    padding: 10px;
+    border-radius: 50%;
+}
+
+.orders-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(450px, 1fr));
+    gap: 25px;
+    margin-top: 20px;
+}
+
+.room-food-card {
+    background: var(--order-bg);
+    border-radius: 15px;
+    overflow: hidden;
+    border-left: 5px solid var(--order-accent);
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+    transition: transform 0.3s;
+    backdrop-filter: blur(5px);
+}
+
+.room-food-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 12px 25px rgba(244, 63, 94, 0.2);
+}
+
+.order-header {
+    background: linear-gradient(135deg, var(--accent), #2d3a4f);
+    padding: 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 2px solid var(--order-accent);
+}
+
+.order-header h4 {
+    font-size: 18px;
+    color: var(--light);
+}
+
+.order-header h4 i {
+    color: var(--order-accent);
+    margin-right: 8px;
+}
+
+.order-header .room-badge {
+    background: linear-gradient(135deg, var(--order-accent), var(--order-highlight));
+    color: white;
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.order-header .order-status-badge {
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    margin-left: 10px;
+}
+
+.order-status-badge.served {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--served);
+    border: 1px solid var(--served);
+}
+
+.order-status-badge.pending {
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--pending);
+    border: 1px solid var(--pending);
+}
+
+.order-status-badge.cancelled {
+    background: rgba(100, 116, 139, 0.15);
+    color: var(--cancelled);
+    border: 1px solid var(--cancelled);
+}
+
+.order-status-badge.mixed {
+    background: rgba(139, 92, 246, 0.15);
+    color: var(--mixed);
+    border: 1px solid var(--mixed);
+}
+
+.order-items {
+    padding: 18px;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.order-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    background: var(--order-item);
+    border-radius: 8px;
+    margin-bottom: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    transition: all 0.2s;
+}
+
+.order-item:hover {
+    background: #35445c;
+}
+
+.order-item.served {
+    border-left: 5px solid var(--served);
+}
+
+.order-item.pending {
+    border-left: 5px solid var(--pending);
+}
+
+.order-item.cancelled {
+    border-left: 5px solid var(--cancelled);
+    opacity: 0.7;
+}
+
+.order-item-info {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+.order-item-name {
+    font-weight: 600;
+    color: var(--light);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.order-item-details {
+    font-size: 12px;
+    color: var(--light-dim);
+}
+
+.served-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-size: 9px;
+    font-weight: 600;
+    margin-left: 5px;
+}
+
+.served-badge.served {
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--served);
+    border: 1px solid var(--served);
+}
+
+.served-badge.pending {
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--pending);
+    border: 1px solid var(--pending);
+}
+
+.served-badge.cancelled {
+    background: rgba(100, 116, 139, 0.15);
+    color: var(--cancelled);
+    border: 1px solid var(--cancelled);
+}
+
+.order-item-price {
+    font-weight: 600;
+    color: var(--order-accent);
+    margin: 0 15px;
+    min-width: 80px;
+    text-align: right;
+}
+
+.order-item-actions {
+    display: flex;
+    gap: 5px;
+}
+
+.order-total {
+    padding: 15px 18px;
+    background: rgba(0, 0, 0, 0.3);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-weight: 600;
+    border-top: 2px solid var(--order-accent);
+    font-size: 16px;
+}
+
+.order-total span:first-child {
+    color: var(--light-dim);
+}
+
+.order-total span:last-child {
+    color: var(--order-accent);
+    font-size: 20px;
+}
+
+.order-footer {
+    padding: 12px 18px;
+    background: rgba(0, 0, 0, 0.2);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.booking-info {
+    font-size: 12px;
+    color: var(--light-dim);
+}
+
+.booking-info i {
+    margin-right: 5px;
+    color: var(--order-accent);
+}
+
+.update-order-status {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.update-order-status select {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 6px 10px;
+    border-radius: 5px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.update-order-status select:hover {
+    background: rgba(255, 255, 255, 0.15);
+}
+
+.update-order-status select.served {
+    border-color: var(--served);
+}
+
+.update-order-status select.pending {
+    border-color: var(--pending);
+}
+
+.update-order-status select.cancelled {
+    border-color: var(--cancelled);
+}
+
+.update-order-status select.mixed {
+    border-color: var(--mixed);
+}
+
+.update-order-status select option {
+    background: var(--order-bg);
+    color: white;
+}
+
+.update-order-status button {
+    background: linear-gradient(135deg, var(--info), #60a5fa);
+    color: white;
+    border: none;
+    padding: 6px 15px;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.update-order-status button:hover {
+    background: linear-gradient(135deg, #2563eb, var(--info));
+    transform: translateY(-2px);
+    box-shadow: 0 4px 10px rgba(59, 130, 246, 0.3);
+}
+
+.btn-delete-order {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--danger);
+    border: none;
+    padding: 6px 12px;
+    border-radius: 5px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.btn-delete-order:hover {
+    background: var(--danger);
+    color: white;
+    transform: translateY(-2px);
+}
+
+.no-orders {
+    padding: 50px;
+    text-align: center;
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 15px;
+    border: 2px dashed var(--purple);
+}
+
+.no-orders i {
+    font-size: 60px;
+    color: var(--purple);
+    margin-bottom: 20px;
+    opacity: 0.5;
+}
+
+.no-orders p {
+    color: var(--light-dim);
+    font-size: 18px;
 }
 
 /* Modal Styles */
@@ -718,7 +1281,7 @@ tbody tr:hover {
 .close-modal {
     background: transparent;
     border: none;
-    color: #aaa;
+    color: var(--light-dim);
     font-size: 28px;
     cursor: pointer;
     transition: all 0.3s;
@@ -754,13 +1317,14 @@ tbody tr:hover {
 .form-group label {
     display: block;
     margin-bottom: 8px;
-    color: #ccc;
+    color: var(--light-dim);
     font-weight: 500;
     font-size: 14px;
 }
 
 .form-group input,
-.form-group textarea {
+.form-group textarea,
+.form-group select {
     width: 100%;
     padding: 12px 15px;
     background: rgba(255, 255, 255, 0.08);
@@ -771,16 +1335,7 @@ tbody tr:hover {
     transition: all 0.3s;
 }
 
-/* Dropdown styling */
 .form-group select {
-    width: 100%;
-    padding: 12px 15px;
-    background: rgba(255, 255, 255, 0.08);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    color: white;
-    font-size: 15px;
-    transition: all 0.3s;
     -webkit-appearance: none;
     -moz-appearance: none;
     appearance: none;
@@ -791,7 +1346,6 @@ tbody tr:hover {
     padding-right: 40px;
 }
 
-/* Make dropdown options visible */
 .form-group select option {
     background-color: var(--secondary) !important;
     color: white !important;
@@ -804,7 +1358,7 @@ tbody tr:hover {
     outline: none;
     border-color: var(--highlight);
     background: rgba(255, 255, 255, 0.12);
-    box-shadow: 0 0 0 2px rgba(233, 69, 96, 0.2);
+    box-shadow: 0 0 0 2px rgba(244, 63, 94, 0.2);
 }
 
 .modal-actions {
@@ -817,7 +1371,7 @@ tbody tr:hover {
 }
 
 .btn-submit {
-    background: var(--success);
+    background: linear-gradient(135deg, var(--success), #0ca678);
     color: white;
     border: none;
     padding: 12px 25px;
@@ -833,9 +1387,9 @@ tbody tr:hover {
 }
 
 .btn-submit:hover {
-    background: #00a085;
+    background: linear-gradient(135deg, #0ca678, var(--success));
     transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(0, 184, 148, 0.3);
+    box-shadow: 0 5px 15px rgba(16, 185, 129, 0.3);
 }
 
 .btn-cancel {
@@ -866,29 +1420,82 @@ tbody tr:hover {
 }
 
 .status-pending {
-    background: rgba(253, 203, 110, 0.2);
-    color: var(--warning);
-    border: 1px solid rgba(253, 203, 110, 0.3);
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--pending);
+    border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
 .status-approved {
-    background: rgba(0, 184, 148, 0.2);
-    color: var(--success);
-    border: 1px solid rgba(0, 184, 148, 0.3);
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--info);
+    border: 1px solid rgba(59, 130, 246, 0.3);
 }
 
 .status-completed {
-    background: rgba(9, 132, 227, 0.2);
-    color: var(--info);
-    border: 1px solid rgba(9, 132, 227, 0.3);
+    background: rgba(16, 185, 129, 0.15);
+    color: var(--success);
+    border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
 .status-cancelled {
-    background: rgba(214, 48, 49, 0.2);
-    color: var(--danger);
-    border: 1px solid rgba(214, 48, 49, 0.3);
+    background: rgba(100, 116, 139, 0.15);
+    color: var(--cancelled);
+    border: 1px solid rgba(100, 116, 139, 0.3);
 }
 
+/* Notification Modal */
+.notification-modal .modal-content {
+    max-width: 400px;
+}
+
+.notification-success {
+    border-color: var(--success) !important;
+}
+
+.notification-error {
+    border-color: var(--danger) !important;
+}
+
+.notification-icon {
+    font-size: 60px;
+    margin: 20px 0;
+}
+
+.notification-success .notification-icon {
+    color: var(--success);
+}
+
+.notification-error .notification-icon {
+    color: var(--danger);
+}
+
+.notification-message {
+    font-size: 18px;
+    margin: 20px 0;
+    color: var(--light);
+}
+
+.notification-actions {
+    margin-top: 20px;
+}
+
+.btn-ok {
+    background: linear-gradient(135deg, var(--info), #60a5fa);
+    color: white;
+    border: none;
+    padding: 12px 30px;
+    border-radius: 8px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.btn-ok:hover {
+    background: linear-gradient(135deg, #2563eb, var(--info));
+    transform: translateY(-2px);
+}
+
+/* Booking Details */
 .booking-details {
     background: rgba(255, 255, 255, 0.05);
     padding: 20px;
@@ -910,7 +1517,7 @@ tbody tr:hover {
 }
 
 .booking-detail label {
-    color: #aaa;
+    color: var(--light-dim);
     font-size: 13px;
 }
 
@@ -945,110 +1552,6 @@ tbody tr:hover {
     border-color: var(--highlight);
 }
 
-/* Notification Modal Styles */
-.notification-modal {
-    z-index: 2000;
-}
-
-.notification-content {
-    max-width: 450px;
-    text-align: center;
-    border: 2px solid;
-}
-
-.notification-success {
-    border-color: var(--success);
-}
-
-.notification-error {
-    border-color: var(--danger);
-}
-
-.notification-warning {
-    border-color: var(--warning);
-}
-
-.notification-icon {
-    font-size: 60px;
-    margin-bottom: 20px;
-}
-
-.notification-success .notification-icon {
-    color: var(--success);
-}
-
-.notification-error .notification-icon {
-    color: var(--danger);
-}
-
-.notification-warning .notification-icon {
-    color: var(--warning);
-}
-
-.notification-title {
-    font-size: 28px;
-    margin-bottom: 15px;
-    color: var(--light);
-}
-
-.notification-message {
-    font-size: 16px;
-    line-height: 1.6;
-    margin-bottom: 25px;
-    color: #ddd;
-}
-
-.notification-actions {
-    display: flex;
-    justify-content: center;
-    gap: 15px;
-    margin-top: 20px;
-}
-
-.btn-ok {
-    background: var(--success);
-    color: white;
-    border: none;
-    padding: 12px 30px;
-    border-radius: 8px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.3s;
-    min-width: 150px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-}
-
-.btn-ok:hover {
-    background: #00a085;
-    transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(0, 184, 148, 0.3);
-}
-
-.btn-confirm {
-    background: var(--warning);
-    color: white;
-    border: none;
-    padding: 12px 30px;
-    border-radius: 8px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.3s;
-    min-width: 150px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-}
-
-.btn-confirm:hover {
-    background: #e8a822;
-    transform: translateY(-2px);
-    box-shadow: 0 5px 15px rgba(253, 203, 110, 0.3);
-}
-
 /* Room Status Colors */
 .room-status {
     padding: 5px 12px;
@@ -1059,21 +1562,21 @@ tbody tr:hover {
 }
 
 .room-status.available {
-    background: rgba(0, 184, 148, 0.2);
+    background: rgba(16, 185, 129, 0.15);
     color: var(--success);
-    border: 1px solid rgba(0, 184, 148, 0.3);
+    border: 1px solid rgba(16, 185, 129, 0.3);
 }
 
 .room-status.occupied {
-    background: rgba(233, 69, 96, 0.2);
+    background: rgba(244, 63, 94, 0.15);
     color: var(--highlight);
-    border: 1px solid rgba(233, 69, 96, 0.3);
+    border: 1px solid rgba(244, 63, 94, 0.3);
 }
 
 .room-status.maintenance {
-    background: rgba(253, 203, 110, 0.2);
-    color: var(--warning);
-    border: 1px solid rgba(253, 203, 110, 0.3);
+    background: rgba(245, 158, 11, 0.15);
+    color: var(--pending);
+    border: 1px solid rgba(245, 158, 11, 0.3);
 }
 
 /* Responsive */
@@ -1087,6 +1590,8 @@ tbody tr:hover {
         display: flex;
         overflow-x: auto;
         padding: 15px;
+        height: auto;
+        position: relative;
     }
     
     .menu-item {
@@ -1135,14 +1640,26 @@ tbody tr:hover {
         gap: 5px;
     }
     
-    .btn-edit, .btn-delete, .btn-view {
+    .btn-edit, .btn-delete, .btn-view, .btn-food {
         width: 100%;
         justify-content: center;
     }
     
-    .notification-modal .modal-content {
-        width: 90%;
-        margin: 30px auto;
+    .orders-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .order-footer {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .update-order-status {
+        width: 100%;
+    }
+    
+    .update-order-status select {
+        flex: 1;
     }
 }
 
@@ -1151,11 +1668,11 @@ tbody tr:hover {
         grid-template-columns: 1fr;
     }
     
-    .modal-actions, .notification-actions {
+    .modal-actions {
         flex-direction: column;
     }
     
-    .btn-cancel, .btn-submit, .btn-ok, .btn-confirm {
+    .btn-cancel, .btn-submit {
         width: 100%;
     }
 }
@@ -1201,6 +1718,9 @@ tbody tr:hover {
         </button>
         <button class="menu-item booking" onclick="showSection('bookings')">
             <i class="fas fa-calendar-check"></i> Bookings
+        </button>
+        <button class="menu-item food-orders" onclick="showSection('food-orders')">
+            <i class="fas fa-hamburger"></i> Food Orders
         </button>
     </div>
 
@@ -1260,6 +1780,11 @@ tbody tr:hover {
                     <h3><?php echo $extras_count; ?></h3>
                     <p>Extra Services</p>
                 </div>
+                <div class="stat-card">
+                    <i class="fas fa-hamburger"></i>
+                    <h3><?php echo $bookings_with_food_count; ?></h3>
+                    <p>Orders with Food</p>
+                </div>
             </div>
             
             <div class="section-header">
@@ -1282,10 +1807,10 @@ tbody tr:hover {
                     <h3>Manage Bookings</h3>
                     <p>Approve/View bookings</p>
                 </div>
-                <div class="stat-card" onclick="openModal('addExtraModal')" style="cursor:pointer;">
-                    <i class="fas fa-plus"></i>
-                    <h3>Add Service</h3>
-                    <p>Add extra service</p>
+                <div class="stat-card" onclick="showSection('food-orders')" style="cursor:pointer;">
+                    <i class="fas fa-hamburger"></i>
+                    <h3>View Food Orders</h3>
+                    <p>Check all room orders</p>
                 </div>
             </div>
         </div>
@@ -1323,7 +1848,7 @@ tbody tr:hover {
                                 <td><?= htmlspecialchars($row['contact']) ?></td>
                                 <td><?= $row['age'] ?></td>
                                 <td>
-                                    <span style="background: <?= $row['role'] == 'admin' ? 'rgba(233, 69, 96, 0.2)' : 'rgba(9, 132, 227, 0.2)'; ?>; 
+                                    <span style="background: <?= $row['role'] == 'admin' ? 'rgba(244, 63, 94, 0.15)' : 'rgba(59, 130, 246, 0.15)'; ?>; 
                                           color: <?= $row['role'] == 'admin' ? 'var(--highlight)' : 'var(--info)'; ?>;
                                           padding: 5px 10px; border-radius: 5px; font-size: 12px;">
                                         <?= $row['role'] ?>
@@ -1426,7 +1951,7 @@ tbody tr:hover {
                                 $status_color = 'var(--danger)';
                             } elseif ($row['stock'] <= 10) {
                                 $stock_status = 'Low Stock';
-                                $status_color = 'var(--warning)';
+                                $status_color = 'var(--pending)';
                             } else {
                                 $stock_status = 'In Stock';
                                 $status_color = 'var(--success)';
@@ -1436,7 +1961,7 @@ tbody tr:hover {
                                 <td><?= $row['f_id'] ?></td>
                                 <td><?= htmlspecialchars($row['item_name']) ?></td>
                                 <td>
-                                    <span style="background: rgba(9, 132, 227, 0.2); color: var(--info); 
+                                    <span style="background: rgba(59, 130, 246, 0.15); color: var(--info); 
                                           padding: 5px 10px; border-radius: 5px; font-size: 12px;">
                                         <?= $row['category'] ?>
                                     </span>
@@ -1449,8 +1974,8 @@ tbody tr:hover {
                                     </span>
                                 </td>
                                 <td>
-                                    <span style="background: <?= $stock_status == 'In Stock' ? 'rgba(0, 184, 148, 0.2)' : ($stock_status == 'Low Stock' ? 'rgba(253, 203, 110, 0.2)' : 'rgba(214, 48, 49, 0.2)'); ?>; 
-                                          color: <?= $stock_status == 'In Stock' ? 'var(--success)' : ($stock_status == 'Low Stock' ? 'var(--warning)' : 'var(--danger)'); ?>;
+                                    <span style="background: <?= $stock_status == 'In Stock' ? 'rgba(16, 185, 129, 0.15)' : ($stock_status == 'Low Stock' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)'); ?>; 
+                                          color: <?= $stock_status == 'In Stock' ? 'var(--success)' : ($stock_status == 'Low Stock' ? 'var(--pending)' : 'var(--danger)'); ?>;
                                           padding: 5px 10px; border-radius: 5px; font-size: 12px;">
                                         <?= $stock_status ?>
                                     </span>
@@ -1565,44 +2090,217 @@ tbody tr:hover {
                 </table>
             </div>
         </div>
+
+        <!-- Food Orders Section - Shows Bookings that have Food Items -->
+        <div id="food-orders" class="content-section">
+            <div class="section-header">
+                <h2><i class="fas fa-hamburger" style="color: var(--purple);"></i> Food Orders (by Booking)</h2>
+                <span class="welcome-message">
+                    <i class="fas fa-shopping-cart"></i> Total Orders: <?php echo $bookings_with_food_count; ?>
+                </span>
+            </div>
+            
+            <?php if (empty($food_orders)): ?>
+                <div class="no-orders">
+                    <i class="fas fa-hamburger"></i>
+                    <p>No food orders have been placed yet.</p>
+                    <p style="font-size: 14px; margin-top: 10px;">Orders will appear here when customers add food items to their bookings.</p>
+                </div>
+            <?php else: ?>
+                <div class="orders-grid">
+                    <?php 
+                    $total_all_orders = 0;
+                    $served_count = 0;
+                    $pending_count = 0;
+                    $cancelled_count = 0;
+                    $mixed_count = 0;
+                    
+                    foreach ($food_orders as $b_id => $items): 
+                        // Get booking info from first item
+                        $booking_info = $items[0];
+                        $room_total = 0;
+                        $item_statuses = [];
+                        
+                        foreach ($items as $item) {
+                            $room_total += $item['quantity'] * $item['price'];
+                            $item_statuses[] = $item['served'];
+                        }
+                        $total_all_orders += $room_total;
+                        
+                        // Determine overall order status
+                        $unique_statuses = array_unique($item_statuses);
+                        if (count($unique_statuses) == 1) {
+                            $order_status = $items[0]['served'];
+                            // Count for summary
+                            if ($order_status == 'served') $served_count++;
+                            elseif ($order_status == 'pending') $pending_count++;
+                            elseif ($order_status == 'cancelled') $cancelled_count++;
+                        } else {
+                            $order_status = 'mixed';
+                            $mixed_count++;
+                        }
+                        
+                        // Count items by status for this order
+                        $status_counts = array_count_values($item_statuses);
+                    ?>
+                        <div class="room-food-card" id="food-card-<?php echo $b_id; ?>" style="border-left-color: <?php 
+                            echo $order_status == 'served' ? 'var(--served)' : 
+                                ($order_status == 'pending' ? 'var(--pending)' : 
+                                ($order_status == 'cancelled' ? 'var(--cancelled)' : 'var(--mixed)')); ?>;">
+                            
+                            <div class="order-header">
+                                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                                    <h4>
+                                        <i class="fas fa-door-open"></i> 
+                                        <?php echo htmlspecialchars($booking_info['room_name']); ?>
+                                    </h4>
+                                    <span class="order-status-badge <?php echo $order_status; ?>">
+                                        <?php 
+                                        if ($order_status == 'served') echo '✓ All Served';
+                                        elseif ($order_status == 'pending') echo '⏳ All Pending';
+                                        elseif ($order_status == 'cancelled') echo '✗ Cancelled';
+                                        else echo '🔄 Mixed';
+                                        ?>
+                                    </span>
+                                </div>
+                                <span class="room-badge">#<?php echo $b_id; ?></span>
+                            </div>
+                            
+                            <div class="order-items">
+                                <?php foreach ($items as $item): ?>
+                                    <div class="order-item <?php echo $item['served']; ?>">
+                                        <div class="order-item-info">
+                                            <span class="order-item-name">
+                                                <?php echo htmlspecialchars($item['item_name']); ?>
+                                                <span class="served-badge <?php echo $item['served']; ?>">
+                                                    <?php 
+                                                    if ($item['served'] == 'served') echo '✓ Served';
+                                                    elseif ($item['served'] == 'pending') echo '⏳ Pending';
+                                                    else echo '✗ Cancelled';
+                                                    ?>
+                                                </span>
+                                            </span>
+                                            <span class="order-item-details">
+                                                <?php echo $item['category']; ?> | Qty: <?php echo $item['quantity']; ?>
+                                            </span>
+                                        </div>
+                                        <div class="order-item-price">
+                                            ₹<?php echo number_format($item['quantity'] * $item['price'], 2); ?>
+                                        </div>
+                                        <div class="order-item-actions">
+                                            <button class="btn-delete" style="padding: 4px 8px; font-size: 11px;" 
+                                                    onclick="showConfirm('Remove this food item from order?', 'admindash.php?delete_booking_food=<?php echo $item['bf_id']; ?>')">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                <?php endforeach; ?>
+                            </div>
+                            
+                            <div class="order-total">
+                                <span>Room Total:</span>
+                                <span>₹<?php echo number_format($room_total, 2); ?></span>
+                            </div>
+                            
+                            <div class="order-footer">
+                                <div class="booking-info">
+                                    <i class="fas fa-user"></i> <?php echo htmlspecialchars($booking_info['user_name']); ?><br>
+                                    <i class="fas fa-calendar-alt"></i> <?php echo date('M d', strtotime($booking_info['booking_date'])); ?>
+                                    (<?php echo date('h:i A', strtotime($booking_info['start_time'])); ?>)
+                                </div>
+                                
+                                <div class="update-order-status">
+                                    <form method="post" style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                                        <input type="hidden" name="b_id" value="<?php echo $b_id; ?>">
+                                        <select name="served_status" class="<?php echo $order_status; ?>">
+                                            <option value="pending" <?php echo $order_status == 'pending' ? 'selected' : ''; ?>>⏳ All Pending</option>
+                                            <option value="served" <?php echo $order_status == 'served' ? 'selected' : ''; ?>>✓ All Served</option>
+                                            <option value="cancelled" <?php echo $order_status == 'cancelled' ? 'selected' : ''; ?>>✗ All Cancelled</option>
+                                        </select>
+                                        <button type="submit" name="update_food_order_status">
+                                            Update
+                                        </button>
+                                    </form>
+                                    <button class="btn-delete-order" onclick="showConfirm('Delete entire food order for Booking #<?php echo $b_id; ?>? This will restore stock and update booking total.', 'admindash.php?delete_whole_order=<?php echo $b_id; ?>')">
+                                        <i class="fas fa-trash"></i> Delete
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <?php if (count($status_counts) > 1): ?>
+                                <div style="padding: 8px 18px; background: rgba(0,0,0,0.3); font-size: 11px; color: var(--light-dim); text-align: right;">
+                                    Breakdown: 
+                                    <?php if (isset($status_counts['served'])): ?>✓ Served: <?php echo $status_counts['served']; ?><?php endif; ?>
+                                    <?php if (isset($status_counts['pending'])): ?> ⏳ Pending: <?php echo $status_counts['pending']; ?><?php endif; ?>
+                                    <?php if (isset($status_counts['cancelled'])): ?> ✗ Cancelled: <?php echo $status_counts['cancelled']; ?><?php endif; ?>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+                
+                <!-- Grand Total for all food orders -->
+                <div style="margin-top: 30px; background: linear-gradient(135deg, var(--accent), #2d3a4f); padding: 20px; border-radius: 10px; text-align: center; border: 2px solid var(--purple);">
+                    <h3 style="color: var(--light); margin-bottom: 10px;">Total Food Revenue</h3>
+                    <p style="font-size: 36px; font-weight: bold; color: var(--purple);">₹<?php echo number_format($total_all_orders, 2); ?></p>
+                </div>
+                
+                <!-- Summary stats by order status -->
+                <div style="margin-top: 20px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px;">
+                    <div style="background: rgba(16, 185, 129, 0.1); padding: 15px; border-radius: 10px; text-align: center; border-left: 5px solid var(--served);">
+                        <h4 style="color: var(--served); font-size: 24px;"><?php echo $served_count; ?></h4>
+                        <p style="color: var(--light-dim); font-size: 14px;">All Served</p>
+                    </div>
+                    <div style="background: rgba(245, 158, 11, 0.1); padding: 15px; border-radius: 10px; text-align: center; border-left: 5px solid var(--pending);">
+                        <h4 style="color: var(--pending); font-size: 24px;"><?php echo $pending_count; ?></h4>
+                        <p style="color: var(--light-dim); font-size: 14px;">All Pending</p>
+                    </div>
+                    <div style="background: rgba(100, 116, 139, 0.1); padding: 15px; border-radius: 10px; text-align: center; border-left: 5px solid var(--cancelled);">
+                        <h4 style="color: var(--cancelled); font-size: 24px;"><?php echo $cancelled_count; ?></h4>
+                        <p style="color: var(--light-dim); font-size: 14px;">All Cancelled</p>
+                    </div>
+                    <div style="background: rgba(139, 92, 246, 0.1); padding: 15px; border-radius: 10px; text-align: center; border-left: 5px solid var(--mixed);">
+                        <h4 style="color: var(--mixed); font-size: 24px;"><?php echo $mixed_count; ?></h4>
+                        <p style="color: var(--light-dim); font-size: 14px;">Mixed Status</p>
+                    </div>
+                </div>
+            <?php endif; ?>
+        </div>
     </div>
 </div>
 
 <!-- MODALS -->
-
 <!-- Add Room Modal -->
 <div id="addRoomModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
             <h3><i class="fas fa-plus-circle"></i> Add New Room</h3>
-            <button class="close-modal" onclick="closeModal('addRoomModal')">&times;</button>
+            <span class="close-modal" onclick="closeModal('addRoomModal')">&times;</span>
         </div>
-        <form method="post" class="modal-form">
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="room_name">Room Name</label>
-                    <input type="text" id="room_name" name="room_name" placeholder="e.g., VIP Suite, Party Room" required>
-                </div>
-                <div class="form-group">
-                    <label for="capacity">Capacity</label>
-                    <input type="number" id="capacity" name="capacity" placeholder="Maximum guests" required min="1">
-                </div>
-                <div class="form-group">
-                    <label for="price">Price Per Hour (₹)</label>
-                    <input type="number" step="0.01" id="price" name="price" placeholder="Price per hour" required min="0">
-                </div>
-                <div class="form-group">
-                    <label for="status">Status</label>
-                    <select id="status" name="status" required>
-                        <option value="Available">Available</option>
-                        <option value="Occupied">Occupied</option>
-                        <option value="Maintenance">Maintenance</option>
-                    </select>
-                </div>
+        <form method="POST" class="modal-form">
+            <div class="form-group">
+                <label>Room Name</label>
+                <input type="text" name="room_name" required placeholder="e.g., VIP Room 1">
+            </div>
+            <div class="form-group">
+                <label>Capacity (persons)</label>
+                <input type="number" name="capacity" required min="1" value="4">
+            </div>
+            <div class="form-group">
+                <label>Price per Hour (₹)</label>
+                <input type="number" name="price" required min="0" step="0.01" value="500">
+            </div>
+            <div class="form-group">
+                <label>Status</label>
+                <select name="status" required>
+                    <option value="Available">Available</option>
+                    <option value="Occupied">Occupied</option>
+                    <option value="Maintenance">Maintenance</option>
+                </select>
             </div>
             <div class="modal-actions">
                 <button type="button" class="btn-cancel" onclick="closeModal('addRoomModal')">Cancel</button>
-                <button type="submit" class="btn-submit" name="add_room">
+                <button type="submit" name="add_room" class="btn-submit">
                     <i class="fas fa-save"></i> Add Room
                 </button>
             </div>
@@ -1615,35 +2313,33 @@ tbody tr:hover {
     <div class="modal-content">
         <div class="modal-header">
             <h3><i class="fas fa-edit"></i> Edit Room</h3>
-            <button class="close-modal" onclick="closeModal('editRoomModal')">&times;</button>
+            <span class="close-modal" onclick="closeModal('editRoomModal')">&times;</span>
         </div>
-        <form method="post" class="modal-form">
-            <input type="hidden" id="edit_room_id" name="room_id">
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="edit_room_name">Room Name</label>
-                    <input type="text" id="edit_room_name" name="room_name" required>
-                </div>
-                <div class="form-group">
-                    <label for="edit_capacity">Capacity</label>
-                    <input type="number" id="edit_capacity" name="capacity" required min="1">
-                </div>
-                <div class="form-group">
-                    <label for="edit_price">Price Per Hour (₹)</label>
-                    <input type="number" step="0.01" id="edit_price" name="price" required min="0">
-                </div>
-                <div class="form-group">
-                    <label for="edit_status">Status</label>
-                    <select id="edit_status" name="status" required>
-                        <option value="Available">Available</option>
-                        <option value="Occupied">Occupied</option>
-                        <option value="Maintenance">Maintenance</option>
-                    </select>
-                </div>
+        <form method="POST" class="modal-form">
+            <input type="hidden" name="room_id" id="edit_room_id">
+            <div class="form-group">
+                <label>Room Name</label>
+                <input type="text" name="room_name" id="edit_room_name" required>
+            </div>
+            <div class="form-group">
+                <label>Capacity (persons)</label>
+                <input type="number" name="capacity" id="edit_capacity" required min="1">
+            </div>
+            <div class="form-group">
+                <label>Price per Hour (₹)</label>
+                <input type="number" name="price" id="edit_price" required min="0" step="0.01">
+            </div>
+            <div class="form-group">
+                <label>Status</label>
+                <select name="status" id="edit_status" required>
+                    <option value="Available">Available</option>
+                    <option value="Occupied">Occupied</option>
+                    <option value="Maintenance">Maintenance</option>
+                </select>
             </div>
             <div class="modal-actions">
                 <button type="button" class="btn-cancel" onclick="closeModal('editRoomModal')">Cancel</button>
-                <button type="submit" class="btn-submit" name="update_room">
+                <button type="submit" name="update_room" class="btn-submit">
                     <i class="fas fa-save"></i> Update Room
                 </button>
             </div>
@@ -1655,29 +2351,26 @@ tbody tr:hover {
 <div id="updateStockModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3><i class="fas fa-boxes"></i> Update Stock Quantity</h3>
-            <button class="close-modal" onclick="closeModal('updateStockModal')">&times;</button>
+            <h3><i class="fas fa-boxes"></i> Update Stock</h3>
+            <span class="close-modal" onclick="closeModal('updateStockModal')">&times;</span>
         </div>
-        <form method="post" class="modal-form">
-            <input type="hidden" id="update_food_id" name="food_id">
+        <form method="POST" class="modal-form">
+            <input type="hidden" name="food_id" id="update_food_id">
             <div class="form-group">
-                <label for="item_name_display">Item Name</label>
-                <input type="text" id="item_name_display" readonly style="background: rgba(255,255,255,0.05); color: #aaa;">
+                <label>Item Name</label>
+                <input type="text" id="item_name_display" readonly disabled style="background: rgba(255,255,255,0.05);">
             </div>
             <div class="form-group">
-                <label for="current_stock_display">Current Stock</label>
-                <input type="text" id="current_stock_display" readonly style="background: rgba(255,255,255,0.05); color: #aaa;">
+                <label>Current Stock</label>
+                <input type="number" id="current_stock_display" readonly disabled style="background: rgba(255,255,255,0.05);">
             </div>
             <div class="form-group">
-                <label for="stock">New Stock Quantity</label>
-                <input type="number" id="stock" name="stock" placeholder="Enter new stock quantity" required min="0" step="1">
-                <small style="color: #aaa; font-size: 12px; margin-top: 5px; display: block;">
-                    Enter 0 if item is out of stock
-                </small>
+                <label>New Stock Quantity</label>
+                <input type="number" name="stock" id="stock" required min="0">
             </div>
             <div class="modal-actions">
                 <button type="button" class="btn-cancel" onclick="closeModal('updateStockModal')">Cancel</button>
-                <button type="submit" class="btn-submit" name="update_food">
+                <button type="submit" name="update_food" class="btn-submit">
                     <i class="fas fa-save"></i> Update Stock
                 </button>
             </div>
@@ -1685,31 +2378,29 @@ tbody tr:hover {
     </div>
 </div>
 
-<!-- Add Extra Modal -->
+<!-- Add Extra Service Modal -->
 <div id="addExtraModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
             <h3><i class="fas fa-plus-circle"></i> Add Extra Service</h3>
-            <button class="close-modal" onclick="closeModal('addExtraModal')">&times;</button>
+            <span class="close-modal" onclick="closeModal('addExtraModal')">&times;</span>
         </div>
-        <form method="post" class="modal-form">
-            <div class="form-row">
-                <div class="form-group">
-                    <label for="name">Service Name</label>
-                    <input type="text" id="name" name="name" placeholder="e.g., Birthday Package, Karaoke Machine" required>
-                </div>
-                <div class="form-group">
-                    <label for="description">Description</label>
-                    <input type="text" id="description" name="description" placeholder="Brief description" required>
-                </div>
-                <div class="form-group">
-                    <label for="price">Price (₹)</label>
-                    <input type="number" step="0.01" id="price" name="price" placeholder="Service price" required min="0">
-                </div>
+        <form method="POST" class="modal-form">
+            <div class="form-group">
+                <label>Service Name</label>
+                <input type="text" name="name" required placeholder="e.g., Birthday Decoration">
+            </div>
+            <div class="form-group">
+                <label>Description</label>
+                <textarea name="description" rows="3" required placeholder="Describe the service..."></textarea>
+            </div>
+            <div class="form-group">
+                <label>Price (₹)</label>
+                <input type="number" name="price" required min="0" step="0.01" value="0">
             </div>
             <div class="modal-actions">
                 <button type="button" class="btn-cancel" onclick="closeModal('addExtraModal')">Cancel</button>
-                <button type="submit" class="btn-submit" name="add_extra">
+                <button type="submit" name="add_extra" class="btn-submit">
                     <i class="fas fa-save"></i> Add Service
                 </button>
             </div>
@@ -1721,34 +2412,30 @@ tbody tr:hover {
 <div id="bookingModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3><i class="fas fa-calendar-alt"></i> Booking Details</h3>
-            <button class="close-modal" onclick="closeModal('bookingModal')">&times;</button>
+            <h3><i class="fas fa-calendar-check"></i> Booking Details</h3>
+            <span class="close-modal" onclick="closeModal('bookingModal')">&times;</span>
         </div>
-        <div id="bookingDetails">
-            <!-- Dynamic content will be inserted here -->
+        <div id="bookingDetails" class="modal-form">
+            <!-- Content will be populated by JavaScript -->
         </div>
     </div>
 </div>
 
 <!-- Confirmation Modal -->
-<div id="confirmModal" class="modal notification-modal">
-    <div class="modal-content notification-content notification-warning">
+<div id="confirmModal" class="modal">
+    <div class="modal-content" style="max-width: 450px;">
         <div class="modal-header">
-            <h3><i class="fas fa-question-circle"></i> Confirm Action</h3>
-            <button class="close-modal" onclick="closeConfirmModal()">&times;</button>
+            <h3><i class="fas fa-exclamation-triangle" style="color: var(--pending);"></i> Confirm Action</h3>
+            <span class="close-modal" onclick="closeConfirmModal()">&times;</span>
         </div>
-        <div class="modal-body">
-            <div class="notification-icon">
-                <i class="fas fa-question-circle"></i>
-            </div>
-            <div class="notification-message" id="confirmMessage">
-                <!-- Message will be inserted here -->
-            </div>
-            <div class="notification-actions">
-                <button type="button" class="btn-cancel" onclick="closeConfirmModal()">
+        <div class="modal-form" style="text-align: center; padding: 20px;">
+            <i class="fas fa-question-circle" style="font-size: 60px; color: var(--pending); margin-bottom: 20px;"></i>
+            <p id="confirmMessage" style="font-size: 18px; margin-bottom: 30px;">Are you sure?</p>
+            <div class="modal-actions" style="justify-content: center;">
+                <button class="btn-cancel" onclick="closeConfirmModal()">
                     <i class="fas fa-times"></i> Cancel
                 </button>
-                <button type="button" class="btn-confirm" id="confirmActionBtn">
+                <button class="btn-submit" id="confirmActionBtn" style="background: var(--pending);">
                     <i class="fas fa-check"></i> Confirm
                 </button>
             </div>
@@ -1757,30 +2444,37 @@ tbody tr:hover {
 </div>
 
 <!-- Notification Modal -->
-<div id="notificationModal" class="modal notification-modal" style="display: <?php echo $show_modal ? 'block' : 'none'; ?>;">
+<?php if ($show_modal): ?>
+<div id="notificationModal" class="modal notification-modal" style="display: block;">
     <div class="modal-content notification-content <?php echo $modal_type == 'success' ? 'notification-success' : 'notification-error'; ?>">
         <div class="modal-header">
             <h3>
-                <i class="fas <?php echo $modal_type == 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'; ?>"></i>
-                <?php echo $modal_type == 'success' ? 'Success!' : 'Error!'; ?>
+                <?php if ($modal_type == 'success'): ?>
+                    <i class="fas fa-check-circle" style="color: var(--success);"></i> Success
+                <?php else: ?>
+                    <i class="fas fa-times-circle" style="color: var(--danger);"></i> Error
+                <?php endif; ?>
             </h3>
-            <button class="close-modal" onclick="closeNotificationModal()">&times;</button>
+            <span class="close-modal" onclick="closeNotificationModal()">&times;</span>
         </div>
-        <div class="modal-body">
+        <div class="modal-form" style="text-align: center;">
             <div class="notification-icon">
-                <i class="fas <?php echo $modal_type == 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'; ?>"></i>
+                <?php if ($modal_type == 'success'): ?>
+                    <i class="fas fa-check-circle"></i>
+                <?php else: ?>
+                    <i class="fas fa-exclamation-circle"></i>
+                <?php endif; ?>
             </div>
-            <div class="notification-message">
-                <?php echo htmlspecialchars($modal_message); ?>
-            </div>
+            <p class="notification-message"><?php echo htmlspecialchars($modal_message); ?></p>
             <div class="notification-actions">
-                <button type="button" class="btn-ok" onclick="closeNotificationModal()">
+                <button class="btn-ok" onclick="closeNotificationModal()">
                     <i class="fas fa-check"></i> OK
                 </button>
             </div>
         </div>
     </div>
 </div>
+<?php endif; ?>
 
 <script>
 // Global variables for confirmation handling
@@ -1815,12 +2509,16 @@ function showSection(sectionId) {
         if (sectionId === 'foods' && text.includes('utensils')) return true;
         if (sectionId === 'extras' && text.includes('star')) return true;
         if (sectionId === 'bookings' && text.includes('calendar')) return true;
+        if (sectionId === 'food-orders' && text.includes('food orders')) return true;
         return false;
     });
     
     if (activeMenuItem) {
         activeMenuItem.classList.add('active');
     }
+    
+    // Update URL hash
+    window.location.hash = sectionId;
 }
 
 // Show edit room modal with data
@@ -1843,7 +2541,7 @@ function showUpdateStockModal(id, name, currentStock) {
     openModal('updateStockModal');
 }
 
-// Show booking modal with details - FIXED VERSION
+// Show booking modal with details
 function showBookingModal(bookingData) {
     currentBookingData = bookingData;
     const bookingDetails = document.getElementById('bookingDetails');
@@ -2091,12 +2789,17 @@ setTimeout(() => {
 
 // Initialize dashboard
 document.addEventListener('DOMContentLoaded', function() {
-    // Set active section based on URL hash
+    // Check URL hash for initial section
     const hash = window.location.hash.substring(1);
     if (hash && document.getElementById(hash)) {
         showSection(hash);
     } else {
         showSection('dashboard');
+    }
+    
+    // If there's a food-orders hash in URL, show that section
+    if (window.location.hash === '#food-orders') {
+        showSection('food-orders');
     }
 });
 </script>

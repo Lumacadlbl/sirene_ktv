@@ -1,0 +1,24 @@
+{
+    "name": "ktv/sirene-system",
+    "description": "KTV karaoke Management System",
+    "type": "project",
+    "require": {
+        "illuminate/database": "^12.52",
+        "intervention/image": "^3.11",
+        "paymongo/paymongo-php": "v0.0.0"
+    },
+    "require-dev": {
+        "filp/whoops": "^2.18"
+    },
+    "autoload": {
+        "psr-4": {
+            "Ktv\\SireneSystem\\": "src/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Lumacadlbl",
+            "email": "lumacadlbl@gmail.com"
+        }
+    ]
+}
