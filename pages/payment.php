@@ -16,10 +16,10 @@ $name = $_SESSION['name'] ?? 'User';
 $role = $_SESSION['role'] ?? 'user';
 $booking_id = $_GET['id'] ?? 0;
 
-// PayMongo Keys
-$paymongo_secret_key = 'sk_test_CuXgiJJHcBEX24FTGBE6KxPd';
-$paymongo_public_key = 'pk_test_PQdr5QWdEXHTJLcs6RXyYjM7';
+$config = require __DIR__ . '/../secret.php';
 
+$paymongo_secret_key = $config['PAYMONGO_SECRET_KEY'];
+$paymongo_public_key = $config['PAYMONGO_PUBLIC_KEY'];
 // FIRST: Check if downpayment column exists, if not create it
 $check_column = $conn->query("SHOW COLUMNS FROM booking LIKE 'downpayment'");
 if ($check_column->num_rows == 0) {
