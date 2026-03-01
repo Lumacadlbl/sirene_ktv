@@ -11,10 +11,7 @@ header("Expires: 0");
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-if (!isset($_SESSION['user_id'])) {
-    header("Location: login.php");
-    exit;
-}
+
 
 // Helper function to get currency from country code
 function getCurrencyFromCountry($country_code) {

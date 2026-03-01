@@ -1524,9 +1524,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <div class="food-browser">
             <div class="food-filters">
                 <div class="filter-tabs" id="filterTabs">
-                    <button class="filter-tab active" onclick="filterFood('all', event)">All Items</button>
+                    <!-- "All Items" filter has been removed -->
                     <?php foreach ($categories as $category): ?>
-                        <button class="filter-tab" onclick="filterFood('<?php echo $category; ?>', event)"><?php echo $category; ?></button>
+                        <button class="filter-tab <?php echo $category === $categories[0] ? 'active' : ''; ?>" onclick="filterFood('<?php echo $category; ?>', event)"><?php echo $category; ?></button>
                     <?php endforeach; ?>
                 </div>
             </div>
@@ -1640,7 +1640,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     let cart = <?php echo json_encode($_SESSION['food_cart']); ?>;
     let currencySymbol = '<?php echo $currency_symbol; ?>';
     
-    // NEW: State management variables
+    // State management variables
     let pendingRequests = new Map();
     let lastAddTime = 0;
     const MIN_REQUEST_INTERVAL = 800; // milliseconds
@@ -1654,7 +1654,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     console.log('Active bookings:', activeBookingIds);
     console.log('Current cart:', cart);
     
-    // NEW: Debounce function to prevent multiple rapid clicks
+    // Debounce function to prevent multiple rapid clicks
     function debounce(func, wait) {
         let timeout;
         return function executedFunction(...args) {
@@ -1667,10 +1667,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         };
     }
     
-    // NEW: Create debounced version
+    // Create debounced version
     const debouncedAddToCart = debounce(confirmAddToCart, 400);
     
-    // NEW: Retry function with exponential backoff
+    // Retry function with exponential backoff
     async function fetchWithRetry(url, options, maxRetries = 2) {
         for (let i = 0; i < maxRetries; i++) {
             try {
@@ -1688,7 +1688,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
     }
     
-    // NEW: Sync cart with server
+    // Sync cart with server
     function syncCartWithServer() {
         const syncStatus = document.getElementById('syncStatus');
         if (syncStatus) syncStatus.style.display = 'block';
@@ -1790,7 +1790,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         
         const items = document.querySelectorAll('.food-item-card');
         items.forEach(item => {
-            if (category === 'all' || item.dataset.category === category) {
+            if (item.dataset.category === category) {
                 item.style.display = 'block';
             } else {
                 item.style.display = 'none';
@@ -2302,7 +2302,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }, 3000);
     }
     
-    // NEW: Periodic sync with server (every 30 seconds)
+    // Periodic sync with server (every 30 seconds)
     function startPeriodicSync() {
         setInterval(() => {
             console.log('Performing periodic cart sync...');
@@ -2323,6 +2323,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             
             document.getElementById('deliveryMessage').innerHTML = 
                 `Your order will be delivered to <strong>${firstBooking.room_name}</strong> during your booking on ${formattedDate} from ${formattedStart} to ${formattedEnd}.`;
+        }
+        
+        // Set initial filter to first category
+        const firstFilterTab = document.querySelector('.filter-tab');
+        if (firstFilterTab) {
+            const firstCategory = firstFilterTab.textContent;
+            filterFood(firstCategory, { target: firstFilterTab });
         }
         
         updateCartDisplay();

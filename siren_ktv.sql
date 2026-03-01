@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Feb 21, 2026 at 04:00 AM
+-- Generation Time: Feb 27, 2026 at 02:36 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -53,7 +53,9 @@ CREATE TABLE `booking` (
 --
 
 INSERT INTO `booking` (`b_id`, `u_id`, `r_id`, `booking_date`, `start_time`, `end_time`, `hours`, `room_amount`, `food_amount`, `subtotal`, `tax_amount`, `total_amount`, `notes`, `status`, `payment_status`, `downpayment`, `paymongo_payment_id`, `created_at`) VALUES
-(28, 13, 7, '2026-02-22 00:00:00', '18:00:00', '20:00:00', 2, 240, 0, 240, 24, 264, NULL, 'confirmed', 'pending_payment', NULL, 'cs_58de5a2ee2d4c2a7e55cf72f', 2147483647);
+(33, 13, 7, '2026-02-28 00:00:00', '18:00:00', '20:00:00', 2, 240, 0, 240, 24, 264, NULL, 'confirmed', 'paid', 264.00, 'cs_957925494a312e9390458547', 2147483647),
+(34, 13, 6, '2026-02-28 00:00:00', '18:00:00', '20:00:00', 2, 400, 0, 400, 40, 440, NULL, 'confirmed', 'pending', NULL, NULL, 2147483647),
+(35, 14, 7, '2026-02-28 00:00:00', '20:00:00', '23:00:00', 3, 360, 0, 360, 36, 396, NULL, 'confirmed', 'paid', 396.00, 'cs_f49a8778c59d707daae979a7', 2147483647);
 
 -- --------------------------------------------------------
 
@@ -67,8 +69,25 @@ CREATE TABLE `booking_food` (
   `f_id` int(11) NOT NULL,
   `quantity` int(11) NOT NULL,
   `price` decimal(10,2) NOT NULL,
-  `served` enum('pending','served','cancelled') DEFAULT 'pending'
+  `served` enum('pending','served','cancelled') DEFAULT 'pending',
+  `payment_id` varchar(100) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
+
+--
+-- Dumping data for table `booking_food`
+--
+
+INSERT INTO `booking_food` (`bf_id`, `b_id`, `f_id`, `quantity`, `price`, `served`, `payment_id`) VALUES
+(27, 33, 36, 6, 90.00, 'served', 'cs_e7e923ae9d4cd33663a6b085'),
+(28, 33, 53, 3, 220.00, 'served', 'cs_e7e923ae9d4cd33663a6b085'),
+(29, 33, 57, 5, 120.00, 'served', 'cs_e7e923ae9d4cd33663a6b085'),
+(30, 33, 55, 1, 200.00, 'served', 'cs_e7e923ae9d4cd33663a6b085'),
+(31, 33, 4, 4, 220.00, 'served', 'cs_e7e923ae9d4cd33663a6b085'),
+(32, 33, 8, 6, 280.00, 'served', 'cs_957925494a312e9390458547'),
+(33, 35, 10, 4, 300.00, 'pending', NULL),
+(34, 35, 4, 1, 220.00, 'pending', NULL),
+(35, 35, 14, 1, 320.00, 'pending', NULL),
+(36, 35, 47, 1, 200.00, 'pending', NULL);
 
 -- --------------------------------------------------------
 
@@ -154,8 +173,11 @@ CREATE TABLE `payments` (
 --
 
 INSERT INTO `payments` (`p_id`, `b_id`, `u_id`, `payment_method`, `payment_status`, `amount`, `payment_date`) VALUES
-(15, 28, 13, 'card', 'pending', 264.00, '2026-02-21 02:40:30'),
-(16, 28, 13, 'paymaya', 'pending', 264.00, '2026-02-21 02:41:55');
+(25, 33, 13, 'card', 'paid', 804.00, '2026-02-27 12:31:57'),
+(26, 33, 13, 'paymaya', 'paid', 804.00, '2026-02-27 12:31:57'),
+(27, 33, 13, 'card', 'pending', 2880.00, '2026-02-27 13:10:45'),
+(28, 33, 13, 'gcash', 'pending', 1680.00, '2026-02-27 13:19:31'),
+(29, 35, 14, 'paymaya', 'paid', 2336.00, '2026-02-27 13:35:18');
 
 -- --------------------------------------------------------
 
@@ -266,13 +288,13 @@ ALTER TABLE `user_tbl`
 -- AUTO_INCREMENT for table `booking`
 --
 ALTER TABLE `booking`
-  MODIFY `b_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=29;
+  MODIFY `b_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=36;
 
 --
 -- AUTO_INCREMENT for table `booking_food`
 --
 ALTER TABLE `booking_food`
-  MODIFY `bf_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=18;
+  MODIFY `bf_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=37;
 
 --
 -- AUTO_INCREMENT for table `extra_expense`
@@ -290,7 +312,7 @@ ALTER TABLE `food_beverages`
 -- AUTO_INCREMENT for table `payments`
 --
 ALTER TABLE `payments`
-  MODIFY `p_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=17;
+  MODIFY `p_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=30;
 
 --
 -- AUTO_INCREMENT for table `room`

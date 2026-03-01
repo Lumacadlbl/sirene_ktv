@@ -15,11 +15,23 @@ $user_id = $_SESSION['user_id'];
 $name = $_SESSION['name'] ?? 'User';
 $role = $_SESSION['role'] ?? 'user';
 $booking_id = $_GET['id'] ?? 0;
+$payment_type = $_GET['type'] ?? 'full'; // 'full' or 'food_only'
+
+// Debug - log the request
+error_log("Payment page accessed - Booking ID: $booking_id, Type: $payment_type");
+
+// Validate booking_id
+if (!$booking_id) {
+    error_log("No booking ID provided");
+    header("Location: my-bookings.php?error=invalid_booking");
+    exit;
+}
 
 $config = require __DIR__ . '/../secret.php';
 
 $paymongo_secret_key = $config['PAYMONGO_SECRET_KEY'];
 $paymongo_public_key = $config['PAYMONGO_PUBLIC_KEY'];
+
 // FIRST: Check if downpayment column exists, if not create it
 $check_column = $conn->query("SHOW COLUMNS FROM booking LIKE 'downpayment'");
 if ($check_column->num_rows == 0) {
@@ -30,6 +42,12 @@ if ($check_column->num_rows == 0) {
 $check_paymongo = $conn->query("SHOW COLUMNS FROM booking LIKE 'paymongo_payment_id'");
 if ($check_paymongo->num_rows == 0) {
     $conn->query("ALTER TABLE booking ADD COLUMN paymongo_payment_id VARCHAR(100) NULL AFTER downpayment");
+}
+
+// Check if payment_id column exists in booking_food
+$check_food_payment = $conn->query("SHOW COLUMNS FROM booking_food LIKE 'payment_id'");
+if ($check_food_payment->num_rows == 0) {
+    $conn->query("ALTER TABLE booking_food ADD COLUMN payment_id VARCHAR(100) NULL AFTER served");
 }
 
 // Fetch booking details
@@ -46,15 +64,40 @@ $booking_result = $booking_query->get_result();
 $booking = $booking_result->fetch_assoc();
 
 if (!$booking) {
-    header("Location: my-bookings.php");
+    error_log("Booking not found - ID: $booking_id, User: $user_id");
+    header("Location: my-bookings.php?error=booking_not_found");
     exit;
 }
 
-// Check if already paid
-if ($booking['payment_status'] == 'paid' || $booking['payment_status'] == 'approved') {
-    header("Location: my-bookings.php?message=already_paid");
+// For food-only payments, we don't care if room is paid or not
+// Customer should be able to pay for additional food even if room is already paid
+if ($payment_type != 'food_only' && ($booking['payment_status'] == 'paid' || $booking['payment_status'] == 'approved')) {
+    // This is a full payment attempt but room is already paid - redirect to food-only payment
+    error_log("Room already paid, redirecting to food-only payment");
+    header("Location: payment.php?id=" . $booking_id . "&type=food_only");
     exit;
 }
+
+// Fetch UNPAID food items (items that don't have a payment_id)
+$food_query = $conn->prepare("
+    SELECT 
+        bf.*,
+        fb.item_name,
+        fb.category
+    FROM booking_food bf
+    JOIN food_beverages fb ON bf.f_id = fb.f_id
+    WHERE bf.b_id = ? 
+    AND bf.served != 'cancelled' 
+    AND (bf.payment_id IS NULL OR bf.payment_id = '')
+    ORDER BY bf.bf_id DESC
+");
+
+$food_query->bind_param("i", $booking_id);
+$food_query->execute();
+$food_result = $food_query->get_result();
+$unpaid_food_items = $food_result->fetch_all(MYSQLI_ASSOC);
+
+error_log("Found " . count($unpaid_food_items) . " unpaid food items");
 
 // Calculate duration
 $start = new DateTime($booking['start_time']);
@@ -62,14 +105,57 @@ $end = new DateTime($booking['end_time']);
 $interval = $start->diff($end);
 $hours = $interval->h + ($interval->i / 60);
 
-// Calculate downpayment (20% of total)
-$total_amount = $booking['total_amount'];
-$downpayment = $total_amount * 0.20;
-$remaining = $total_amount - $downpayment;
+// Calculate totals based on payment type
+$room_total = $booking['total_amount'];
+$unpaid_food_total = 0;
+foreach ($unpaid_food_items as $item) {
+    $unpaid_food_total += ($item['price'] * $item['quantity']);
+}
+
+// Also fetch previously paid food items for display
+$paid_food_query = $conn->prepare("
+    SELECT 
+        bf.*,
+        fb.item_name,
+        fb.category
+    FROM booking_food bf
+    JOIN food_beverages fb ON bf.f_id = fb.f_id
+    WHERE bf.b_id = ? 
+    AND bf.payment_id IS NOT NULL 
+    AND bf.payment_id != ''
+    ORDER BY bf.bf_id DESC
+");
+
+$paid_food_query->bind_param("i", $booking_id);
+$paid_food_query->execute();
+$paid_food_result = $paid_food_query->get_result();
+$paid_food_items = $paid_food_result->fetch_all(MYSQLI_ASSOC);
+
+if ($payment_type == 'food_only') {
+    // For food-only payment, only charge for unpaid food items
+    $grand_total = $unpaid_food_total;
+    $downpayment = 0;
+    $remaining = 0;
+    $is_food_only = true;
+    $payment_description = "Food Order - Booking #" . str_pad($booking_id, 6, '0', STR_PAD_LEFT);
+    
+    // If no unpaid food items, show message
+    if ($unpaid_food_total <= 0) {
+        $no_food_error = "No unpaid food items to pay for.";
+        error_log("No unpaid food items for booking: $booking_id");
+    }
+} else {
+    // For full payment, charge room + all unpaid food
+    $grand_total = $room_total + $unpaid_food_total;
+    $downpayment = $room_total * 0.20; // 20% of room only
+    $remaining = $grand_total - $downpayment;
+    $is_food_only = false;
+    $payment_description = "Booking #" . str_pad($booking_id, 6, '0', STR_PAD_LEFT) . " - " . $booking['room_name'];
+}
 
 // Function to create PayMongo checkout session
-function createPayMongoCheckout($amount, $description, $booking_id, $user_id, $payment_method, $secret_key, $room_name, $hours) {
-    $amount_in_centavos = $amount * 100; // PayMongo uses centavos
+function createPayMongoCheckout($amount, $description, $booking_id, $user_id, $payment_method, $secret_key, $room_name, $hours, $unpaid_food_items = [], $room_total = 0, $unpaid_food_total = 0, $is_food_only = false) {
+    $amount_in_centavos = $amount * 100;
     
     $ch = curl_init();
     
@@ -86,30 +172,69 @@ function createPayMongoCheckout($amount, $description, $booking_id, $user_id, $p
     }
     
     // Create line items
-    $line_items = [
-        [
+    $line_items = [];
+    
+    if (!$is_food_only && $room_total > 0) {
+        // Add room booking as first line item (only for full payment)
+        $line_items[] = [
             'name' => $room_name . ' - KTV Room',
             'quantity' => 1,
-            'amount' => $amount_in_centavos,
-            'description' => $description . ' (' . number_format($hours, 1) . ' hours)',
+            'amount' => $room_total * 100,
+            'description' => 'Room rental for ' . number_format($hours, 1) . ' hours',
             'currency' => 'PHP'
-        ]
+        ];
+    }
+    
+    // Add unpaid food items
+    if (!empty($unpaid_food_items)) {
+        foreach ($unpaid_food_items as $item) {
+            $line_items[] = [
+                'name' => $item['item_name'],
+                'quantity' => intval($item['quantity']),
+                'amount' => floatval($item['price']) * 100,
+                'description' => $item['category'] ?? 'Food Item',
+                'currency' => 'PHP'
+            ];
+        }
+    }
+    
+    // Create metadata
+    $metadata = [
+        'booking_id' => $booking_id,
+        'user_id' => $user_id,
+        'payment_type' => $is_food_only ? 'food_only' : 'full',
+        'room_name' => $room_name,
+        'hours' => $hours,
+        'room_total' => $room_total,
+        'food_total' => $unpaid_food_total,
+        'grand_total' => $amount,
+        'has_food' => !empty($unpaid_food_items) ? 'yes' : 'no'
     ];
+    
+    // Add food items to metadata
+    if (!empty($unpaid_food_items)) {
+        $food_list = [];
+        $food_ids = [];
+        foreach ($unpaid_food_items as $index => $item) {
+            $food_list[] = $item['item_name'] . ' (x' . $item['quantity'] . ')';
+            if ($item['bf_id']) {
+                $food_ids[] = $item['bf_id'];
+            }
+        }
+        $metadata['food_items'] = implode(', ', $food_list);
+        $metadata['food_item_ids'] = implode(',', $food_ids);
+    }
     
     $data = [
         'data' => [
             'attributes' => [
                 'line_items' => $line_items,
                 'payment_method_types' => $payment_method_types,
-                'success_url' => 'http://localhost/sirene_ktv/pages/payment-success.php?booking_id=' . $booking_id . '&session_id={CHECKOUT_SESSION_ID}',
-                'cancel_url' => 'http://localhost/sirene_ktv/pages/payment-failed.php?booking_id=' . $booking_id,
+                'success_url' => 'http://localhost/sirene_ktv/pages/payment-success.php?booking_id=' . $booking_id . '&session_id={CHECKOUT_SESSION_ID}&type=' . ($is_food_only ? 'food_only' : 'full'),
+                'cancel_url' => 'http://localhost/sirene_ktv/pages/payment-failed.php?booking_id=' . $booking_id . '&type=' . ($is_food_only ? 'food_only' : 'full'),
                 'description' => $description,
-                'metadata' => [
-                    'booking_id' => $booking_id,
-                    'user_id' => $user_id,
-                    'room_name' => $room_name,
-                    'hours' => $hours
-                ]
+                'metadata' => $metadata,
+                'statement_descriptor' => 'Sirene KTV ' . ($is_food_only ? 'Food' : 'Booking')
             ]
         ]
     ];
@@ -123,6 +248,7 @@ function createPayMongoCheckout($amount, $description, $booking_id, $user_id, $p
         'Authorization: Basic ' . base64_encode($secret_key . ':'),
         'Accept: application/json'
     ]);
+    curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Only for local testing, remove in production
     
     $response = curl_exec($ch);
     $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -130,6 +256,7 @@ function createPayMongoCheckout($amount, $description, $booking_id, $user_id, $p
     if (curl_error($ch)) {
         $error = curl_error($ch);
         curl_close($ch);
+        error_log("cURL Error: " . $error);
         return ['error' => true, 'message' => $error];
     }
     
@@ -138,7 +265,7 @@ function createPayMongoCheckout($amount, $description, $booking_id, $user_id, $p
     $response_data = json_decode($response, true);
     
     if ($http_code >= 400) {
-        error_log("PayMongo Error: " . $response);
+        error_log("PayMongo Error Response: " . print_r($response_data, true));
         return ['error' => true, 'response' => $response_data];
     }
     
@@ -147,12 +274,28 @@ function createPayMongoCheckout($amount, $description, $booking_id, $user_id, $p
 
 // Handle PayMongo payment creation
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) {
-    $payment_method = $_POST['payment_method'];
-    $amount_to_pay = ($payment_method == 'store') ? $downpayment : $total_amount;
-    $description = "Booking #" . str_pad($booking_id, 6, '0', STR_PAD_LEFT) . " - " . $booking['room_name'];
+    error_log("Payment form submitted");
     
-    if ($payment_method == 'store') {
-        // Handle store payment (direct database update)
+    $payment_method = $_POST['payment_method'];
+    
+    // Determine amount to pay based on payment type
+    if ($is_food_only) {
+        $amount_to_pay = $unpaid_food_total;
+        $final_description = "Food Order - Booking #" . str_pad($booking_id, 6, '0', STR_PAD_LEFT);
+    } else {
+        $amount_to_pay = ($payment_method == 'store') ? $downpayment : $grand_total;
+        $final_description = "Booking #" . str_pad($booking_id, 6, '0', STR_PAD_LEFT) . " - " . $booking['room_name'];
+    }
+    
+    // Add food info to description if there are food items
+    if (!empty($unpaid_food_items)) {
+        $final_description .= " + Food (" . count($unpaid_food_items) . " items)";
+    }
+    
+    error_log("Payment amount: $amount_to_pay, Method: $payment_method");
+    
+    if ($payment_method == 'store' && !$is_food_only) {
+        // Handle store payment (only for full payment, not for food-only)
         try {
             $conn->begin_transaction();
             
@@ -161,7 +304,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) 
             $update->bind_param("di", $downpayment, $booking_id);
             $update->execute();
             
-            // Insert into payments table (without transaction_id)
+            // Insert into payments table
             $payment_insert = $conn->prepare("
                 INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
                 VALUES (?, ?, 'store', 'pending', ?, NOW())
@@ -171,78 +314,146 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) 
             
             $conn->commit();
             
-            // Redirect to success page
+            error_log("Store payment recorded, redirecting to success page");
             header("Location: payment-success.php?booking_id=" . $booking_id . "&method=store");
             exit;
             
         } catch (Exception $e) {
             $conn->rollback();
             $error = "Database error: " . $e->getMessage();
+            error_log("Store payment error: " . $e->getMessage());
         }
     } else {
         // Create PayMongo checkout session
+        error_log("Creating PayMongo checkout session");
         $result = createPayMongoCheckout(
             $amount_to_pay, 
-            $description, 
+            $final_description, 
             $booking_id, 
             $user_id, 
             $payment_method, 
             $paymongo_secret_key,
             $booking['room_name'],
-            $hours
+            $hours,
+            $unpaid_food_items,
+            $room_total,
+            $unpaid_food_total,
+            $is_food_only
         );
         
         if ($result['error']) {
             if (isset($result['response']['errors'])) {
                 $error = "PayMongo Error: " . json_encode($result['response']['errors']);
+                error_log("PayMongo API Error: " . json_encode($result['response']['errors']));
             } else {
                 $error = "Failed to create payment: " . ($result['message'] ?? 'Unknown error');
+                error_log("Payment creation error: " . ($result['message'] ?? 'Unknown error'));
             }
         } else {
             // Get checkout URL and session ID from response
             $checkout_url = $result['response']['data']['attributes']['checkout_url'];
             $session_id = $result['response']['data']['id'];
             
-            // Store session_id in booking table
-            $update = $conn->prepare("UPDATE booking SET paymongo_payment_id = ?, payment_status = 'pending_payment' WHERE b_id = ?");
-            $update->bind_param("si", $session_id, $booking_id);
-            $update->execute();
+            error_log("PayMongo session created: $session_id");
+            error_log("Checkout URL: $checkout_url");
             
-            // Insert into payments table (without transaction_id)
-            $payment_insert = $conn->prepare("
-                INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
-                VALUES (?, ?, ?, 'pending', ?, NOW())
-            ");
-            $payment_insert->bind_param("iisd", $booking_id, $user_id, $payment_method, $amount_to_pay);
-            $payment_insert->execute();
+            // Start transaction
+            $conn->begin_transaction();
             
-            // Redirect to PayMongo checkout
-            header("Location: " . $checkout_url);
-            exit;
+            try {
+                if ($is_food_only) {
+                    // For food-only payment, store payment ID in booking_food records for unpaid items
+                    $update = $conn->prepare("UPDATE booking_food SET payment_id = ? WHERE b_id = ? AND (payment_id IS NULL OR payment_id = '')");
+                    $update->bind_param("si", $session_id, $booking_id);
+                    $update->execute();
+                    $updated_count = $update->affected_rows;
+                    error_log("Updated $updated_count food items with payment_id: $session_id");
+                    
+                    // Also update booking table to track the payment
+                    $update_booking = $conn->prepare("UPDATE booking SET paymongo_payment_id = ? WHERE b_id = ?");
+                    $update_booking->bind_param("si", $session_id, $booking_id);
+                    $update_booking->execute();
+                    
+                    // Update booking status if needed (but don't change if already paid)
+                    if ($booking['payment_status'] != 'paid' && $booking['payment_status'] != 'approved') {
+                        $update_status = $conn->prepare("UPDATE booking SET payment_status = 'food_payment_pending' WHERE b_id = ?");
+                        $update_status->bind_param("i", $booking_id);
+                        $update_status->execute();
+                    }
+                } else {
+                    // For full payment, store session_id in booking table
+                    $update = $conn->prepare("UPDATE booking SET paymongo_payment_id = ?, payment_status = 'pending_payment' WHERE b_id = ?");
+                    $update->bind_param("si", $session_id, $booking_id);
+                    $update->execute();
+                }
+                
+                // Insert into payments table
+                $payment_insert = $conn->prepare("
+                    INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
+                    VALUES (?, ?, ?, 'pending', ?, NOW())
+                ");
+                $payment_insert->bind_param("iisd", $booking_id, $user_id, $payment_method, $amount_to_pay);
+                $payment_insert->execute();
+                
+                $conn->commit();
+                
+                error_log("Database updated, redirecting to PayMongo: $checkout_url");
+                
+                // Redirect to PayMongo checkout using JavaScript for reliability
+                echo "<script>
+                    console.log('Redirecting to PayMongo: " . $checkout_url . "');
+                    window.location.href = '" . $checkout_url . "';
+                </script>";
+                exit;
+                
+            } catch (Exception $e) {
+                $conn->rollback();
+                $error = "Database error: " . $e->getMessage();
+                error_log("Database transaction error: " . $e->getMessage());
+            }
         }
     }
 }
 
 // For debugging - show the actual error
 if (isset($error)) {
-    echo "<div style='background: rgba(214, 48, 49, 0.2); border: 2px solid #d63031; border-radius: 10px; padding: 20px; margin: 20px; color: #d63031;'>";
-    echo "<h3><i class='fas fa-exclamation-circle'></i> Payment Error</h3>";
-    echo "<pre style='background: rgba(0,0,0,0.3); padding: 10px; border-radius: 5px; margin-top: 10px; color: #ff9999; white-space: pre-wrap;'>";
-    echo htmlspecialchars(print_r($error, true));
-    echo "</pre>";
-    echo "<p style='margin-top: 10px; font-size: 14px;'>Please try again or contact support.</p>";
+    echo "<div style='background: rgba(214, 48, 49, 0.2); border: 2px solid #d63031; border-radius: 20px; padding: 30px; margin: 40px auto; max-width: 800px; color: #d63031; text-align: center;'>";
+    echo "<h3 style='margin-bottom: 20px;'><i class='fas fa-exclamation-circle' style='font-size: 40px;'></i><br>Payment Error</h3>";
+    echo "<div style='background: rgba(0,0,0,0.3); padding: 20px; border-radius: 10px; margin: 20px 0; color: #ff9999; text-align: left; overflow-x: auto;'>";
+    echo "<pre style='white-space: pre-wrap;'>" . htmlspecialchars(print_r($error, true)) . "</pre>";
     echo "</div>";
+    echo "<p style='margin-bottom: 25px; font-size: 16px;'>Please try again or contact support.</p>";
+    echo "<div style='display: flex; gap: 15px; justify-content: center;'>";
+    echo "<a href='payment.php?id=" . $booking_id . "&type=" . $payment_type . "' style='display: inline-block; padding: 12px 30px; background: linear-gradient(135deg, #666, #444); color: white; text-decoration: none; border-radius: 8px; font-weight: bold;'>Try Again</a>";
+    echo "<a href='my-bookings.php' style='display: inline-block; padding: 12px 30px; background: linear-gradient(135deg, #d63031, #c0392b); color: white; text-decoration: none; border-radius: 8px; font-weight: bold;'>Back to Bookings</a>";
+    echo "</div>";
+    echo "</div>";
+    exit;
 }
+
+// Show no food error message
+if (isset($no_food_error)) {
+    echo "<div style='background: rgba(253, 203, 110, 0.2); border: 2px solid #fdcb6e; border-radius: 20px; padding: 50px; margin: 50px auto; max-width: 600px; color: #fdcb6e; text-align: center;'>";
+    echo "<i class='fas fa-utensils' style='font-size: 70px; margin-bottom: 25px;'></i>";
+    echo "<h3 style='margin-bottom: 20px; font-size: 28px;'>No Unpaid Food Items</h3>";
+    echo "<p style='margin-bottom: 35px; font-size: 16px; line-height: 1.6;'>" . $no_food_error . "</p>";
+    echo "<a href='my-bookings.php' style='display: inline-block; padding: 15px 45px; background: linear-gradient(135deg, #fdcb6e, #e8a822); color: #333; text-decoration: none; border-radius: 10px; font-weight: bold; font-size: 16px;'>Back to Bookings</a>";
+    echo "</div>";
+    exit;
+}
+
+// If this is a food-only payment but there are unpaid items, show the payment page
+// Otherwise, continue with the HTML
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payment - Booking #<?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?> - Sirene KTV</title>
+    <title><?php echo $is_food_only ? 'Food Payment' : 'Payment'; ?> - Booking #<?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?> - Sirene KTV</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        /* Keep all your existing CSS here */
+        /* Copy all your existing CSS here - keeping it exactly the same */
         * {
             margin: 0;
             padding: 0;
@@ -255,14 +466,20 @@ if (isset($error)) {
             --accent: #0f3460;
             --highlight: #e94560;
             --light: #f5f5f5;
+            --dark: #0d1117;
             --success: #00b894;
             --warning: #fdcb6e;
             --danger: #d63031;
             --info: #0984e3;
+            --purple: #6c5ce7;
+            --orange: #e67e22;
+            --teal: #008080;
             --gcash: #0057e4;
             --paymaya: #ff4d4d;
             --card: #6c5ce7;
             --store: #00b894;
+            --food: #e67e22;
+            --paid: #00b894;
         }
 
         body {
@@ -284,6 +501,8 @@ if (isset($error)) {
             z-index: 100;
             backdrop-filter: blur(10px);
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            flex-wrap: wrap;
+            gap: 15px;
         }
 
         .header-left h1 {
@@ -307,6 +526,7 @@ if (isset($error)) {
             display: flex;
             align-items: center;
             gap: 20px;
+            flex-wrap: wrap;
         }
 
         .user-info {
@@ -347,7 +567,7 @@ if (isset($error)) {
         }
 
         .container {
-            max-width: 1000px;
+            max-width: 1200px;
             margin: 40px auto;
             padding: 0 30px;
         }
@@ -377,53 +597,63 @@ if (isset($error)) {
             font-size: 16px;
         }
 
-        .live-banner {
-            background: linear-gradient(135deg, rgba(0, 184, 148, 0.15), rgba(0, 184, 148, 0.05));
-            border: 2px solid var(--success);
-            border-radius: 15px;
-            padding: 20px 25px;
+        .payment-type-banner {
+            background: <?php echo $is_food_only ? 'linear-gradient(135deg, rgba(230, 126, 34, 0.15), rgba(230, 126, 34, 0.05))' : 'linear-gradient(135deg, rgba(0, 184, 148, 0.15), rgba(0, 184, 148, 0.05))'; ?>;
+            border: 2px solid <?php echo $is_food_only ? 'var(--food)' : 'var(--success)'; ?>;
+            border-radius: 20px;
+            padding: 25px 30px;
             margin-bottom: 30px;
             display: flex;
             align-items: center;
-            gap: 20px;
+            gap: 25px;
             backdrop-filter: blur(10px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
         }
 
-        .live-banner i {
-            font-size: 30px;
-            color: var(--success);
+        .payment-type-banner i {
+            font-size: 40px;
+            color: <?php echo $is_food_only ? 'var(--food)' : 'var(--success)'; ?>;
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 50%;
         }
 
-        .live-banner-content h3 {
-            color: var(--success);
-            margin-bottom: 5px;
-            font-size: 18px;
+        .banner-content h3 {
+            color: <?php echo $is_food_only ? 'var(--food)' : 'var(--success)'; ?>;
+            margin-bottom: 8px;
+            font-size: 20px;
+            font-weight: 600;
         }
 
-        .live-banner-content p {
-            color: rgba(255, 255, 255, 0.8);
-            font-size: 14px;
+        .banner-content p {
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 15px;
+            line-height: 1.5;
         }
 
         .policy-banner {
             background: linear-gradient(135deg, rgba(253, 203, 110, 0.15), rgba(253, 203, 110, 0.05));
             border: 2px solid var(--warning);
-            border-radius: 15px;
-            padding: 20px 25px;
+            border-radius: 20px;
+            padding: 25px 30px;
             margin-bottom: 30px;
             display: flex;
             align-items: center;
-            gap: 20px;
+            gap: 25px;
         }
 
         .policy-banner i {
-            font-size: 30px;
+            font-size: 40px;
             color: var(--warning);
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 50%;
         }
 
         .policy-content h3 {
             color: var(--warning);
-            margin-bottom: 10px;
+            margin-bottom: 15px;
+            font-size: 20px;
         }
 
         .policy-content ul {
@@ -431,16 +661,19 @@ if (isset($error)) {
         }
 
         .policy-content li {
-            margin: 8px 0;
+            margin: 10px 0;
             display: flex;
             align-items: center;
-            gap: 10px;
-            color: rgba(255, 255, 255, 0.9);
+            gap: 12px;
+            color: rgba(255, 255, 255, 0.95);
+            font-size: 15px;
         }
 
         .policy-content li i {
-            font-size: 16px;
+            font-size: 18px;
             color: var(--warning);
+            background: transparent;
+            padding: 0;
         }
 
         .booking-panel {
@@ -531,47 +764,173 @@ if (isset($error)) {
             color: white;
         }
 
+        .food-items-panel {
+            background: rgba(230, 126, 34, 0.1);
+            border: 1px solid var(--food);
+            border-radius: 16px;
+            padding: 25px;
+            margin-top: 25px;
+        }
+
+        .food-items-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+            color: var(--food);
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .food-items-title i {
+            font-size: 24px;
+        }
+
+        .food-item-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s;
+        }
+
+        .food-item-row:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .food-item-row:last-child {
+            border-bottom: none;
+        }
+
+        .food-item-info {
+            flex: 2;
+        }
+
+        .food-item-name {
+            font-weight: 600;
+            color: white;
+            margin-bottom: 5px;
+            font-size: 16px;
+        }
+
+        .food-item-category {
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .food-item-quantity {
+            flex: 1;
+            text-align: center;
+            color: var(--food);
+            font-weight: 600;
+            font-size: 16px;
+        }
+
+        .food-item-price {
+            flex: 1;
+            text-align: right;
+            color: var(--highlight);
+            font-weight: 600;
+            font-size: 18px;
+        }
+
+        .paid-items-panel {
+            background: rgba(0, 184, 148, 0.1);
+            border: 1px solid var(--paid);
+            border-radius: 16px;
+            padding: 25px;
+            margin-top: 25px;
+        }
+
+        .paid-items-title {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 20px;
+            color: var(--paid);
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .paid-items-title i {
+            font-size: 24px;
+        }
+
+        .paid-item-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            opacity: 0.8;
+        }
+
+        .paid-item-row:last-child {
+            border-bottom: none;
+        }
+
+        .paid-item-name {
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .paid-item-badge {
+            background: rgba(0, 184, 148, 0.3);
+            color: var(--paid);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+
         .payment-breakdown {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: <?php echo $is_food_only ? 'repeat(1, 1fr)' : 'repeat(4, 1fr)'; ?>;
             gap: 20px;
             margin: 30px 0;
         }
 
         .breakdown-item {
             background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            padding: 20px;
+            border-radius: 16px;
+            padding: 25px 20px;
             text-align: center;
             border: 1px solid rgba(255, 255, 255, 0.1);
+            transition: all 0.3s;
+        }
+
+        .breakdown-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
         }
 
         .breakdown-item.total {
             border-color: var(--highlight);
+            background: rgba(233, 69, 96, 0.1);
+        }
+
+        .breakdown-item.food {
+            border-color: var(--food);
+            background: rgba(230, 126, 34, 0.1);
         }
 
         .breakdown-item.downpayment {
             border-color: var(--warning);
+            background: rgba(253, 203, 110, 0.1);
         }
 
         .breakdown-item.remaining {
             border-color: var(--info);
-        }
-
-        .breakdown-label {
-            font-size: 12px;
-            color: #aaa;
-            text-transform: uppercase;
-            margin-bottom: 10px;
-        }
-
-        .breakdown-value {
-            font-size: 24px;
-            font-weight: 700;
+            background: rgba(9, 132, 227, 0.1);
         }
 
         .breakdown-item.total .breakdown-value {
             color: var(--highlight);
+        }
+
+        .breakdown-item.food .breakdown-value {
+            color: var(--food);
         }
 
         .breakdown-item.downpayment .breakdown-value {
@@ -582,10 +941,23 @@ if (isset($error)) {
             color: var(--info);
         }
 
-        .breakdown-note {
-            font-size: 11px;
+        .breakdown-label {
+            font-size: 13px;
             color: #aaa;
-            margin-top: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
+        }
+
+        .breakdown-value {
+            font-size: 28px;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .breakdown-note {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.6);
         }
 
         .payment-section {
@@ -619,7 +991,7 @@ if (isset($error)) {
 
         .payment-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: <?php echo $is_food_only ? 'repeat(3, 1fr)' : 'repeat(4, 1fr)'; ?>;
             gap: 20px;
             margin: 25px 0;
         }
@@ -627,15 +999,13 @@ if (isset($error)) {
         .payment-card {
             background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
             border: 2px solid rgba(255, 255, 255, 0.1);
-            border-radius: 16px;
-            padding: 25px 20px;
+            border-radius: 20px;
+            padding: 30px 20px;
             text-align: center;
             cursor: pointer;
             transition: all 0.3s;
             position: relative;
             overflow: hidden;
-            width: 100%;
-            border: none;
         }
 
         .payment-card::before {
@@ -656,7 +1026,7 @@ if (isset($error)) {
         .payment-card:hover {
             transform: translateY(-5px);
             border-color: var(--highlight);
-            box-shadow: 0 10px 30px rgba(233, 69, 96, 0.3);
+            box-shadow: 0 15px 40px rgba(233, 69, 96, 0.3);
         }
 
         .payment-card.gcash { --method-color: var(--gcash); }
@@ -665,47 +1035,48 @@ if (isset($error)) {
         .payment-card.store { --method-color: var(--store); }
 
         .payment-icon {
-            width: 70px;
-            height: 70px;
+            width: 80px;
+            height: 80px;
             background: linear-gradient(135deg, var(--method-color), color-mix(in srgb, var(--method-color) 70%, black));
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            margin: 0 auto 15px;
+            margin: 0 auto 20px;
         }
 
         .payment-icon i {
-            font-size: 30px;
+            font-size: 35px;
             color: white;
         }
 
         .payment-name {
-            font-size: 18px;
+            font-size: 20px;
             font-weight: 600;
             color: white;
             margin-bottom: 8px;
         }
 
         .payment-desc {
-            font-size: 12px;
+            font-size: 13px;
             color: #aaa;
+            margin-bottom: 15px;
         }
 
         .payment-badge {
             display: inline-block;
             background: rgba(255, 255, 255, 0.1);
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 11px;
-            margin-top: 10px;
+            padding: 5px 15px;
+            border-radius: 25px;
+            font-size: 12px;
             color: var(--method-color);
+            font-weight: 600;
         }
 
         .instructions-box {
             background: rgba(9, 132, 227, 0.1);
             border: 1px solid var(--info);
-            border-radius: 16px;
+            border-radius: 20px;
             padding: 25px;
             margin-top: 30px;
         }
@@ -713,36 +1084,41 @@ if (isset($error)) {
         .instructions-title {
             display: flex;
             align-items: center;
-            gap: 10px;
-            margin-bottom: 15px;
+            gap: 12px;
+            margin-bottom: 20px;
         }
 
         .instructions-title i {
             color: var(--info);
-            font-size: 20px;
+            font-size: 22px;
         }
 
         .instructions-title h4 {
             color: var(--info);
-            font-size: 16px;
+            font-size: 18px;
+            font-weight: 600;
         }
 
         .instructions-list {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
-            gap: 15px;
+            gap: 20px;
         }
 
         .instruction-item {
             display: flex;
             align-items: center;
-            gap: 10px;
-            color: rgba(255, 255, 255, 0.8);
+            gap: 12px;
+            color: rgba(255, 255, 255, 0.9);
             font-size: 14px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
         }
 
         .instruction-item i {
             color: var(--info);
+            font-size: 18px;
         }
 
         /* Modal Styles */
@@ -761,8 +1137,8 @@ if (isset($error)) {
         }
 
         .modal-container {
-            background: var(--secondary);
-            border-radius: 24px;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-radius: 30px;
             padding: 40px;
             max-width: 500px;
             width: 90%;
@@ -771,6 +1147,8 @@ if (isset($error)) {
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
             animation: modalSlideIn 0.3s ease-out;
             position: relative;
+            max-height: 90vh;
+            overflow-y: auto;
         }
 
         @keyframes modalSlideIn {
@@ -785,8 +1163,8 @@ if (isset($error)) {
         }
 
         .modal-icon {
-            width: 80px;
-            height: 80px;
+            width: 90px;
+            height: 90px;
             background: linear-gradient(135deg, var(--highlight), #ff7675);
             border-radius: 50%;
             display: flex;
@@ -796,7 +1174,7 @@ if (isset($error)) {
         }
 
         .modal-icon i {
-            font-size: 36px;
+            font-size: 40px;
             color: white;
         }
 
@@ -816,16 +1194,16 @@ if (isset($error)) {
 
         .modal-details {
             background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            padding: 20px;
-            margin: 20px 0;
+            border-radius: 20px;
+            padding: 25px;
+            margin: 25px 0;
             text-align: left;
         }
 
         .modal-detail-item {
             display: flex;
             justify-content: space-between;
-            padding: 10px 0;
+            padding: 12px 0;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
 
@@ -835,12 +1213,37 @@ if (isset($error)) {
 
         .modal-detail-label {
             color: #aaa;
-            font-size: 14px;
+            font-size: 15px;
         }
 
         .modal-detail-value {
             color: var(--highlight);
             font-weight: 600;
+            font-size: 16px;
+        }
+
+        .modal-food-items {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 2px solid var(--food);
+        }
+
+        .modal-food-title {
+            color: var(--food);
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .modal-food-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            font-size: 15px;
+            color: rgba(255, 255, 255, 0.9);
         }
 
         .modal-buttons {
@@ -873,6 +1276,7 @@ if (isset($error)) {
         .modal-btn-secondary {
             background: rgba(255, 255, 255, 0.1);
             color: white;
+            border: 1px solid rgba(255, 255, 255, 0.2);
         }
 
         .modal-btn-secondary:hover {
@@ -896,8 +1300,8 @@ if (isset($error)) {
             right: 20px;
             background: rgba(255, 255, 255, 0.1);
             border: none;
-            width: 36px;
-            height: 36px;
+            width: 40px;
+            height: 40px;
             border-radius: 50%;
             color: white;
             cursor: pointer;
@@ -905,28 +1309,12 @@ if (isset($error)) {
             display: flex;
             align-items: center;
             justify-content: center;
+            font-size: 18px;
         }
 
         .modal-close:hover {
             background: rgba(255, 255, 255, 0.2);
             transform: rotate(90deg);
-        }
-
-        /* Method-specific modal icons */
-        .modal-gcash .modal-icon {
-            background: linear-gradient(135deg, var(--gcash), #0040b0);
-        }
-
-        .modal-card .modal-icon {
-            background: linear-gradient(135deg, var(--card), #5649c0);
-        }
-
-        .modal-paymaya .modal-icon {
-            background: linear-gradient(135deg, var(--paymaya), #cc3d3d);
-        }
-
-        .modal-store .modal-icon {
-            background: linear-gradient(135deg, var(--store), #00a085);
         }
 
         footer {
@@ -937,39 +1325,62 @@ if (isset($error)) {
             color: #aaa;
         }
 
+        .loading-spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 10px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
         @media (max-width: 768px) {
             header {
                 padding: 15px 20px;
-                flex-direction: column;
-                gap: 15px;
             }
-
+            
             .header-right {
-                flex-direction: column;
                 width: 100%;
+                justify-content: center;
             }
-
+            
             .user-info, .back-btn {
                 width: 100%;
                 justify-content: center;
             }
-
-            .booking-details-grid {
-                grid-template-columns: 1fr;
+            
+            .container {
+                padding: 0 20px;
             }
-
+            
             .payment-grid {
                 grid-template-columns: repeat(2, 1fr);
             }
-
+            
+            .payment-breakdown {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .booking-details-grid {
+                grid-template-columns: 1fr;
+            }
+            
             .instructions-list {
                 grid-template-columns: 1fr;
             }
-
-            .payment-breakdown {
-                grid-template-columns: 1fr;
+            
+            .policy-banner, .payment-type-banner {
+                flex-direction: column;
+                text-align: center;
+                gap: 15px;
             }
-
+            
             .modal-buttons {
                 flex-direction: column;
             }
@@ -979,29 +1390,27 @@ if (isset($error)) {
             .payment-grid {
                 grid-template-columns: 1fr;
             }
-        }
-
-        .error-container {
-            background: rgba(214, 48, 49, 0.2);
-            border: 2px solid var(--danger);
-            border-radius: 10px;
-            padding: 20px;
-            margin: 20px;
-            color: var(--danger);
-        }
-
-        .error-container pre {
-            background: rgba(0,0,0,0.3);
-            padding: 10px;
-            border-radius: 5px;
-            margin-top: 10px;
-            white-space: pre-wrap;
-            color: #ff9999;
+            
+            .payment-breakdown {
+                grid-template-columns: 1fr;
+            }
+            
+            .food-item-row {
+                flex-direction: column;
+                gap: 10px;
+                text-align: center;
+            }
+            
+            .food-item-info, .food-item-quantity, .food-item-price {
+                width: 100%;
+                text-align: center;
+            }
         }
     </style>
 </head>
 <body>
-    <!-- Store Payment Modal -->
+    <!-- Store Payment Modal (only show if not food-only) -->
+    <?php if (!$is_food_only): ?>
     <div class="modal-overlay" id="storeModal">
         <div class="modal-container modal-store">
             <button class="modal-close" onclick="closeModal('storeModal')">
@@ -1014,75 +1423,104 @@ if (isset($error)) {
             <p class="modal-message">Please confirm your store payment details</p>
             <div class="modal-details">
                 <div class="modal-detail-item">
-                    <span class="modal-detail-label">Total Amount:</span>
-                    <span class="modal-detail-value">₱<?php echo number_format($total_amount, 2); ?></span>
+                    <span class="modal-detail-label">Room Total:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($room_total, 2); ?></span>
+                </div>
+                <?php if ($unpaid_food_total > 0): ?>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Food Total:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($unpaid_food_total, 2); ?></span>
+                </div>
+                <?php endif; ?>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Grand Total:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($grand_total, 2); ?></span>
                 </div>
                 <div class="modal-detail-item">
                     <span class="modal-detail-label">Downpayment (20%):</span>
-                    <span class="modal-detail-value">₱<?php echo number_format($downpayment, 2); ?></span>
+                    <span class="modal-detail-value" style="color: var(--warning);">₱<?php echo number_format($downpayment, 2); ?></span>
                 </div>
                 <div class="modal-detail-item">
                     <span class="modal-detail-label">Remaining Balance:</span>
                     <span class="modal-detail-value">₱<?php echo number_format($remaining, 2); ?></span>
                 </div>
-                <div class="modal-detail-item">
-                    <span class="modal-detail-label">Booking #:</span>
-                    <span class="modal-detail-value"><?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></span>
+                <?php if (!empty($unpaid_food_items)): ?>
+                <div class="modal-food-items">
+                    <div class="modal-food-title">
+                        <i class="fas fa-utensils"></i> Unpaid Food Items
+                    </div>
+                    <?php foreach ($unpaid_food_items as $item): ?>
+                    <div class="modal-food-item">
+                        <span><?php echo htmlspecialchars($item['item_name']); ?> x<?php echo $item['quantity']; ?></span>
+                        <span>₱<?php echo number_format($item['price'] * $item['quantity'], 2); ?></span>
+                    </div>
+                    <?php endforeach; ?>
                 </div>
-                <div class="modal-detail-item">
-                    <span class="modal-detail-label">Room:</span>
-                    <span class="modal-detail-value"><?php echo htmlspecialchars($booking['room_name']); ?></span>
-                </div>
+                <?php endif; ?>
             </div>
             <div class="modal-buttons">
-                <form method="POST" style="flex: 1;">
+                <form method="POST" id="storePaymentForm" style="flex: 1;">
                     <input type="hidden" name="pay_with_paymongo" value="1">
                     <input type="hidden" name="payment_method" value="store">
-                    <button type="submit" class="modal-btn modal-btn-store">Confirm & Pay at Store</button>
+                    <button type="submit" class="modal-btn modal-btn-store" onclick="submitPaymentForm('storePaymentForm')">
+                        Confirm & Pay at Store
+                    </button>
                 </form>
                 <button class="modal-btn modal-btn-secondary" onclick="closeModal('storeModal')">Cancel</button>
             </div>
         </div>
     </div>
+    <?php endif; ?>
 
     <!-- GCash Payment Modal -->
     <div class="modal-overlay" id="gcashModal">
-        <div class="modal-container modal-gcash">
+        <div class="modal-container <?php echo $is_food_only ? 'modal-food' : 'modal-gcash'; ?>">
             <button class="modal-close" onclick="closeModal('gcashModal')">
                 <i class="fas fa-times"></i>
             </button>
             <div class="modal-icon">
-                <i class="fas fa-mobile-alt"></i>
+                <i class="<?php echo $is_food_only ? 'fas fa-utensils' : 'fas fa-mobile-alt'; ?>"></i>
             </div>
             <h2 class="modal-title">Pay with GCash</h2>
             <p class="modal-message">You will be redirected to PayMongo secure checkout</p>
             <div class="modal-details">
+                <?php if (!$is_food_only): ?>
                 <div class="modal-detail-item">
-                    <span class="modal-detail-label">Amount:</span>
-                    <span class="modal-detail-value">₱<?php echo number_format($total_amount, 2); ?></span>
+                    <span class="modal-detail-label">Room Total:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($room_total, 2); ?></span>
                 </div>
+                <?php endif; ?>
+                <?php if ($unpaid_food_total > 0): ?>
                 <div class="modal-detail-item">
-                    <span class="modal-detail-label">Payment Method:</span>
-                    <span class="modal-detail-value">GCash</span>
+                    <span class="modal-detail-label">Food Total:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($unpaid_food_total, 2); ?></span>
                 </div>
+                <?php endif; ?>
                 <div class="modal-detail-item">
-                    <span class="modal-detail-label">Booking #:</span>
-                    <span class="modal-detail-value"><?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></span>
+                    <span class="modal-detail-label">Total Amount:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($grand_total, 2); ?></span>
                 </div>
-                <div class="modal-detail-item">
-                    <span class="modal-detail-label">Room:</span>
-                    <span class="modal-detail-value"><?php echo htmlspecialchars($booking['room_name']); ?></span>
+                <?php if (!empty($unpaid_food_items)): ?>
+                <div class="modal-food-items">
+                    <div class="modal-food-title">
+                        <i class="fas fa-utensils"></i> Unpaid Food Items
+                    </div>
+                    <?php foreach ($unpaid_food_items as $item): ?>
+                    <div class="modal-food-item">
+                        <span><?php echo htmlspecialchars($item['item_name']); ?> x<?php echo $item['quantity']; ?></span>
+                        <span>₱<?php echo number_format($item['price'] * $item['quantity'], 2); ?></span>
+                    </div>
+                    <?php endforeach; ?>
                 </div>
-                <div class="modal-detail-item">
-                    <span class="modal-detail-label">Duration:</span>
-                    <span class="modal-detail-value"><?php echo number_format($hours, 1); ?> hours</span>
-                </div>
+                <?php endif; ?>
             </div>
             <div class="modal-buttons">
-                <form method="POST" style="flex: 1;">
+                <form method="POST" id="gcashPaymentForm" style="flex: 1;">
                     <input type="hidden" name="pay_with_paymongo" value="1">
                     <input type="hidden" name="payment_method" value="gcash">
-                    <button type="submit" class="modal-btn modal-btn-primary">Proceed to PayMongo</button>
+                    <button type="submit" class="modal-btn modal-btn-primary" onclick="submitPaymentForm('gcashPaymentForm')">
+                        Proceed to PayMongo
+                    </button>
                 </form>
                 <button class="modal-btn modal-btn-secondary" onclick="closeModal('gcashModal')">Cancel</button>
             </div>
@@ -1091,42 +1529,53 @@ if (isset($error)) {
 
     <!-- Card Payment Modal -->
     <div class="modal-overlay" id="cardModal">
-        <div class="modal-container modal-card">
+        <div class="modal-container <?php echo $is_food_only ? 'modal-food' : 'modal-card'; ?>">
             <button class="modal-close" onclick="closeModal('cardModal')">
                 <i class="fas fa-times"></i>
             </button>
             <div class="modal-icon">
-                <i class="fas fa-credit-card"></i>
+                <i class="<?php echo $is_food_only ? 'fas fa-utensils' : 'fas fa-credit-card'; ?>"></i>
             </div>
             <h2 class="modal-title">Pay with Card</h2>
             <p class="modal-message">You will be redirected to PayMongo secure checkout</p>
             <div class="modal-details">
+                <?php if (!$is_food_only): ?>
                 <div class="modal-detail-item">
-                    <span class="modal-detail-label">Amount:</span>
-                    <span class="modal-detail-value">₱<?php echo number_format($total_amount, 2); ?></span>
+                    <span class="modal-detail-label">Room Total:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($room_total, 2); ?></span>
                 </div>
+                <?php endif; ?>
+                <?php if ($unpaid_food_total > 0): ?>
                 <div class="modal-detail-item">
-                    <span class="modal-detail-label">Payment Method:</span>
-                    <span class="modal-detail-value">Credit/Debit Card</span>
+                    <span class="modal-detail-label">Food Total:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($unpaid_food_total, 2); ?></span>
                 </div>
+                <?php endif; ?>
                 <div class="modal-detail-item">
-                    <span class="modal-detail-label">Booking #:</span>
-                    <span class="modal-detail-value"><?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></span>
+                    <span class="modal-detail-label">Total Amount:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($grand_total, 2); ?></span>
                 </div>
-                <div class="modal-detail-item">
-                    <span class="modal-detail-label">Room:</span>
-                    <span class="modal-detail-value"><?php echo htmlspecialchars($booking['room_name']); ?></span>
+                <?php if (!empty($unpaid_food_items)): ?>
+                <div class="modal-food-items">
+                    <div class="modal-food-title">
+                        <i class="fas fa-utensils"></i> Unpaid Food Items
+                    </div>
+                    <?php foreach ($unpaid_food_items as $item): ?>
+                    <div class="modal-food-item">
+                        <span><?php echo htmlspecialchars($item['item_name']); ?> x<?php echo $item['quantity']; ?></span>
+                        <span>₱<?php echo number_format($item['price'] * $item['quantity'], 2); ?></span>
+                    </div>
+                    <?php endforeach; ?>
                 </div>
-                <div class="modal-detail-item">
-                    <span class="modal-detail-label">Duration:</span>
-                    <span class="modal-detail-value"><?php echo number_format($hours, 1); ?> hours</span>
-                </div>
+                <?php endif; ?>
             </div>
             <div class="modal-buttons">
-                <form method="POST" style="flex: 1;">
+                <form method="POST" id="cardPaymentForm" style="flex: 1;">
                     <input type="hidden" name="pay_with_paymongo" value="1">
                     <input type="hidden" name="payment_method" value="card">
-                    <button type="submit" class="modal-btn modal-btn-primary">Proceed to PayMongo</button>
+                    <button type="submit" class="modal-btn modal-btn-primary" onclick="submitPaymentForm('cardPaymentForm')">
+                        Proceed to PayMongo
+                    </button>
                 </form>
                 <button class="modal-btn modal-btn-secondary" onclick="closeModal('cardModal')">Cancel</button>
             </div>
@@ -1135,56 +1584,58 @@ if (isset($error)) {
 
     <!-- PayMaya Payment Modal -->
     <div class="modal-overlay" id="paymayaModal">
-        <div class="modal-container modal-paymaya">
+        <div class="modal-container <?php echo $is_food_only ? 'modal-food' : 'modal-paymaya'; ?>">
             <button class="modal-close" onclick="closeModal('paymayaModal')">
                 <i class="fas fa-times"></i>
             </button>
             <div class="modal-icon">
-                <i class="fas fa-wallet"></i>
+                <i class="<?php echo $is_food_only ? 'fas fa-utensils' : 'fas fa-wallet'; ?>"></i>
             </div>
             <h2 class="modal-title">Pay with PayMaya</h2>
             <p class="modal-message">You will be redirected to PayMongo secure checkout</p>
             <div class="modal-details">
+                <?php if (!$is_food_only): ?>
                 <div class="modal-detail-item">
-                    <span class="modal-detail-label">Amount:</span>
-                    <span class="modal-detail-value">₱<?php echo number_format($total_amount, 2); ?></span>
+                    <span class="modal-detail-label">Room Total:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($room_total, 2); ?></span>
                 </div>
+                <?php endif; ?>
+                <?php if ($unpaid_food_total > 0): ?>
                 <div class="modal-detail-item">
-                    <span class="modal-detail-label">Payment Method:</span>
-                    <span class="modal-detail-value">PayMaya</span>
+                    <span class="modal-detail-label">Food Total:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($unpaid_food_total, 2); ?></span>
                 </div>
+                <?php endif; ?>
                 <div class="modal-detail-item">
-                    <span class="modal-detail-label">Booking #:</span>
-                    <span class="modal-detail-value"><?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></span>
+                    <span class="modal-detail-label">Total Amount:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($grand_total, 2); ?></span>
                 </div>
-                <div class="modal-detail-item">
-                    <span class="modal-detail-label">Room:</span>
-                    <span class="modal-detail-value"><?php echo htmlspecialchars($booking['room_name']); ?></span>
+                <?php if (!empty($unpaid_food_items)): ?>
+                <div class="modal-food-items">
+                    <div class="modal-food-title">
+                        <i class="fas fa-utensils"></i> Unpaid Food Items
+                    </div>
+                    <?php foreach ($unpaid_food_items as $item): ?>
+                    <div class="modal-food-item">
+                        <span><?php echo htmlspecialchars($item['item_name']); ?> x<?php echo $item['quantity']; ?></span>
+                        <span>₱<?php echo number_format($item['price'] * $item['quantity'], 2); ?></span>
+                    </div>
+                    <?php endforeach; ?>
                 </div>
-                <div class="modal-detail-item">
-                    <span class="modal-detail-label">Duration:</span>
-                    <span class="modal-detail-value"><?php echo number_format($hours, 1); ?> hours</span>
-                </div>
+                <?php endif; ?>
             </div>
             <div class="modal-buttons">
-                <form method="POST" style="flex: 1;">
+                <form method="POST" id="paymayaPaymentForm" style="flex: 1;">
                     <input type="hidden" name="pay_with_paymongo" value="1">
                     <input type="hidden" name="payment_method" value="paymaya">
-                    <button type="submit" class="modal-btn modal-btn-primary">Proceed to PayMongo</button>
+                    <button type="submit" class="modal-btn modal-btn-primary" onclick="submitPaymentForm('paymayaPaymentForm')">
+                        Proceed to PayMongo
+                    </button>
                 </form>
                 <button class="modal-btn modal-btn-secondary" onclick="closeModal('paymayaModal')">Cancel</button>
             </div>
         </div>
     </div>
-
-    <!-- Error Display -->
-    <?php if (isset($error)): ?>
-    <div class="error-container">
-        <i class="fas fa-exclamation-circle"></i> Payment Error
-        <pre><?php echo htmlspecialchars(print_r($error, true)); ?></pre>
-        <p style="margin-top: 10px; font-size: 14px;">Please try again or contact support.</p>
-    </div>
-    <?php endif; ?>
 
     <header>
         <div class="header-left">
@@ -1205,22 +1656,23 @@ if (isset($error)) {
     <div class="container">
         <div class="page-header">
             <h2>
-                <i class="fas fa-credit-card"></i>
-                Complete Payment
+                <i class="<?php echo $is_food_only ? 'fas fa-utensils' : 'fas fa-credit-card'; ?>"></i>
+                <?php echo $is_food_only ? 'Food Payment' : 'Complete Payment'; ?>
             </h2>
             <p>Booking #<?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></p>
         </div>
 
-        <!-- Live Mode Banner -->
-        <div class="live-banner">
-            <i class="fas fa-check-circle"></i>
-            <div class="live-banner-content">
-                <h3><i class="fas fa-shield-alt"></i> SECURE PAYMENT</h3>
-                <p>Payments are processed securely by PayMongo. We never store your card details.</p>
+        <!-- Payment Type Banner -->
+        <div class="payment-type-banner">
+            <i class="<?php echo $is_food_only ? 'fas fa-utensils' : 'fas fa-check-circle'; ?>"></i>
+            <div class="banner-content">
+                <h3><i class="fas fa-shield-alt"></i> <?php echo $is_food_only ? 'FOOD PAYMENT' : 'SECURE PAYMENT'; ?></h3>
+                <p><?php echo $is_food_only ? 'You are paying for your unpaid food items. Previously paid items are shown below for reference.' : 'Payments are processed securely by PayMongo. We never store your card details.'; ?></p>
             </div>
         </div>
 
-        <!-- Cancellation Policy Banner -->
+        <?php if (!$is_food_only): ?>
+        <!-- Cancellation Policy Banner (only for full payment) -->
         <div class="policy-banner">
             <i class="fas fa-exclamation-triangle"></i>
             <div class="policy-content">
@@ -1228,10 +1680,11 @@ if (isset($error)) {
                 <ul>
                     <li><i class="fas fa-clock"></i> Cancel up to 24 hours before booking for FULL refund</li>
                     <li><i class="fas fa-hourglass-half"></i> Cancel within 24 hours: 20% downpayment is non-refundable</li>
-                    <li><i class="fas fa-times-circle"></i> No-show: Full charge applies (₱<?php echo number_format($total_amount, 2); ?>)</li>
+                    <li><i class="fas fa-times-circle"></i> No-show: Full charge applies (₱<?php echo number_format($grand_total, 2); ?>)</li>
                 </ul>
             </div>
         </div>
+        <?php endif; ?>
 
         <!-- Booking Details Panel -->
         <div class="booking-panel">
@@ -1284,14 +1737,65 @@ if (isset($error)) {
                     </div>
                 </div>
             </div>
+            
+            <!-- Unpaid Food Items Section -->
+            <?php if (!empty($unpaid_food_items)): ?>
+            <div class="food-items-panel">
+                <div class="food-items-title">
+                    <i class="fas fa-utensils"></i>
+                    <span>Unpaid Food Items (<?php echo count($unpaid_food_items); ?> items)</span>
+                </div>
+                <?php foreach ($unpaid_food_items as $item): ?>
+                <div class="food-item-row">
+                    <div class="food-item-info">
+                        <div class="food-item-name"><?php echo htmlspecialchars($item['item_name']); ?></div>
+                        <div class="food-item-category"><?php echo htmlspecialchars($item['category']); ?></div>
+                    </div>
+                    <div class="food-item-quantity">x<?php echo $item['quantity']; ?></div>
+                    <div class="food-item-price">₱<?php echo number_format($item['price'] * $item['quantity'], 2); ?></div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+            <?php endif; ?>
+
+            <!-- Previously Paid Food Items (for reference) -->
+            <?php if (!empty($paid_food_items)): ?>
+            <div class="paid-items-panel">
+                <div class="paid-items-title">
+                    <i class="fas fa-check-circle"></i>
+                    <span>Previously Paid Food Items (<?php echo count($paid_food_items); ?> items)</span>
+                </div>
+                <?php foreach ($paid_food_items as $item): ?>
+                <div class="paid-item-row">
+                    <div>
+                        <span class="paid-item-name"><?php echo htmlspecialchars($item['item_name']); ?> x<?php echo $item['quantity']; ?></span>
+                    </div>
+                    <div>
+                        <span class="paid-item-badge">PAID</span>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+            <?php endif; ?>
         </div>
 
         <!-- Payment Breakdown -->
         <div class="payment-breakdown">
+            <?php if (!$is_food_only): ?>
             <div class="breakdown-item total">
-                <div class="breakdown-label">Total Amount</div>
-                <div class="breakdown-value">₱<?php echo number_format($total_amount, 2); ?></div>
+                <div class="breakdown-label">Room Total</div>
+                <div class="breakdown-value">₱<?php echo number_format($room_total, 2); ?></div>
             </div>
+            <?php endif; ?>
+            
+            <?php if ($unpaid_food_total > 0): ?>
+            <div class="breakdown-item food">
+                <div class="breakdown-label">Unpaid Food Total</div>
+                <div class="breakdown-value">₱<?php echo number_format($unpaid_food_total, 2); ?></div>
+            </div>
+            <?php endif; ?>
+            
+            <?php if (!$is_food_only): ?>
             <div class="breakdown-item downpayment">
                 <div class="breakdown-label">Downpayment (20%)</div>
                 <div class="breakdown-value">₱<?php echo number_format($downpayment, 2); ?></div>
@@ -1302,6 +1806,7 @@ if (isset($error)) {
                 <div class="breakdown-value">₱<?php echo number_format($remaining, 2); ?></div>
                 <div class="breakdown-note">Payable at store</div>
             </div>
+            <?php endif; ?>
         </div>
 
         <!-- Payment Methods -->
@@ -1342,7 +1847,8 @@ if (isset($error)) {
                     <span class="payment-badge">PayMongo</span>
                 </div>
 
-                <!-- Pay at Store -->
+                <!-- Pay at Store (only for full payment) -->
+                <?php if (!$is_food_only): ?>
                 <div class="payment-card store" onclick="showModal('storeModal')">
                     <div class="payment-icon">
                         <i class="fas fa-store"></i>
@@ -1351,6 +1857,7 @@ if (isset($error)) {
                     <p class="payment-desc">Pay in person</p>
                     <span class="payment-badge">20% Downpayment</span>
                 </div>
+                <?php endif; ?>
             </div>
 
             <!-- Payment Instructions -->
@@ -1368,14 +1875,22 @@ if (isset($error)) {
                         <i class="fas fa-credit-card"></i>
                         <span><strong>Card:</strong> Secure 3D Secure checkout</span>
                     </div>
+                    <?php if (!$is_food_only): ?>
                     <div class="instruction-item">
                         <i class="fas fa-store"></i>
                         <span><strong>Store:</strong> Pay 20% downpayment at store</span>
                     </div>
+                    <?php endif; ?>
                     <div class="instruction-item">
                         <i class="fas fa-clock"></i>
                         <span><strong>Booking #:</strong> <?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?></span>
                     </div>
+                    <?php if (!empty($unpaid_food_items)): ?>
+                    <div class="instruction-item">
+                        <i class="fas fa-utensils"></i>
+                        <span><strong>Unpaid Items:</strong> <?php echo count($unpaid_food_items); ?> items</span>
+                    </div>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
@@ -1385,20 +1900,67 @@ if (isset($error)) {
         <p>&copy; 2024 Sirene KTV. All Rights Reserved. Payments powered by PayMongo.</p>
     </footer>
 
-    <!-- JavaScript for modals -->
+    <!-- JavaScript for modals and form submission -->
     <script>
     function showModal(modalId) {
         document.getElementById(modalId).style.display = 'flex';
+        document.body.style.overflow = 'hidden';
     }
 
     function closeModal(modalId) {
         document.getElementById(modalId).style.display = 'none';
+        document.body.style.overflow = 'auto';
     }
 
+    function submitPaymentForm(formId) {
+        const form = document.getElementById(formId);
+        const submitBtn = form.querySelector('button[type="submit"]');
+        
+        // Disable button and show loading
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="loading-spinner"></span> Processing...';
+        
+        // Log for debugging
+        console.log('Submitting form:', formId);
+        
+        // Submit the form
+        form.submit();
+    }
+
+    // Close modal when clicking outside
     window.addEventListener('click', function(event) {
         if (event.target.classList.contains('modal-overlay')) {
             event.target.style.display = 'none';
+            document.body.style.overflow = 'auto';
         }
+    });
+
+    // Close modal with Escape key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            document.querySelectorAll('.modal-overlay').forEach(modal => {
+                if (modal.style.display === 'flex') {
+                    modal.style.display = 'none';
+                    document.body.style.overflow = 'auto';
+                }
+            });
+        }
+    });
+
+    // Add loading animation to payment cards
+    document.querySelectorAll('.payment-card').forEach(card => {
+        card.addEventListener('click', function() {
+            this.style.transform = 'scale(0.98)';
+            setTimeout(() => {
+                this.style.transform = '';
+            }, 200);
+        });
+    });
+
+    // Debug - log when page loads
+    document.addEventListener('DOMContentLoaded', function() {
+        console.log('Payment page loaded - Booking ID: <?php echo $booking_id; ?>, Type: <?php echo $payment_type; ?>');
+        console.log('Unpaid food items: <?php echo count($unpaid_food_items); ?>');
     });
     </script>
 </body>

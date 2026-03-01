@@ -11,12 +11,12 @@ $user_id = $_SESSION['user_id'];
 $name = $_SESSION['name'] ?? 'User';
 $role = $_SESSION['role'] ?? 'user';
 
-// Fetch user's bookings - use booking.payment_status since you have it in booking table
-$bookings_query = $conn->prepare("
+// Fetch user's room bookings
+$room_bookings_query = $conn->prepare("
     SELECT b.*, r.room_name, r.capcity, r.price_hr,
            b.status as booking_status,
-           b.payment_status as payment_status,  -- Get from booking table
-           p.payment_status as payments_status,  -- Also get from payments table for reference
+           b.payment_status as payment_status,
+           p.payment_status as payments_status,
            p.amount as paid_amount,
            p.payment_method,
            p.payment_date
@@ -27,22 +27,128 @@ $bookings_query = $conn->prepare("
     ORDER BY b.booking_date DESC, b.start_time DESC
 ");
 
-if (!$bookings_query) {
+if (!$room_bookings_query) {
     die("Prepare failed: " . $conn->error);
 }
 
-$bookings_query->bind_param("i", $user_id);
-$bookings_query->execute();
-$bookings_result = $bookings_query->get_result();
-$bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
+$room_bookings_query->bind_param("i", $user_id);
+$room_bookings_query->execute();
+$room_bookings_result = $room_bookings_query->get_result();
+$room_bookings = $room_bookings_result->fetch_all(MYSQLI_ASSOC);
+
+// Fetch user's food orders with booking details and food_beverages information
+$food_orders_query = $conn->prepare("
+    SELECT 
+        bf.*,
+        fb.item_name as food_name,
+        fb.category,
+        fb.price as original_price,
+        b.b_id as booking_id,
+        b.booking_date,
+        b.start_time,
+        b.end_time,
+        r.room_name,
+        b.total_amount as booking_total,
+        b.status as booking_status,
+        b.payment_status as booking_payment_status
+    FROM booking_food bf
+    JOIN food_beverages fb ON bf.f_id = fb.f_id
+    JOIN booking b ON bf.b_id = b.b_id
+    JOIN room r ON b.r_id = r.r_id
+    WHERE b.u_id = ?
+    ORDER BY b.booking_date DESC, b.start_time DESC, bf.bf_id DESC
+");
+
+if (!$food_orders_query) {
+    die("Prepare failed: " . $conn->error);
+}
+
+$food_orders_query->bind_param("i", $user_id);
+$food_orders_query->execute();
+$food_orders_result = $food_orders_query->get_result();
+$food_orders = $food_orders_result->fetch_all(MYSQLI_ASSOC);
+
+// Group food orders by booking for summary
+$food_orders_by_booking = [];
+foreach ($food_orders as $order) {
+    $booking_id = $order['booking_id'];
+    if (!isset($food_orders_by_booking[$booking_id])) {
+        $food_orders_by_booking[$booking_id] = [
+            'booking_date' => $order['booking_date'],
+            'room_name' => $order['room_name'],
+            'booking_status' => $order['booking_status'],
+            'booking_payment_status' => $order['booking_payment_status'],
+            'items' => [],
+            'total' => 0,
+            'has_unserved_items' => false,
+            'all_served' => true
+        ];
+    }
+    $food_orders_by_booking[$booking_id]['items'][] = $order;
+    $food_orders_by_booking[$booking_id]['total'] += ($order['price'] * $order['quantity']);
+    
+    // Check if any items are not served
+    if ($order['served'] == 'pending') {
+        $food_orders_by_booking[$booking_id]['has_unserved_items'] = true;
+    }
+    
+    // Check if all items are served
+    if ($order['served'] != 'served') {
+        $food_orders_by_booking[$booking_id]['all_served'] = false;
+    }
+}
+
+// Calculate statistics for room bookings
+$total_room_bookings = count($room_bookings);
+$upcoming_room_bookings = array_filter($room_bookings, function($b) {
+    $bookingTime = strtotime($b['booking_date'] . ' ' . $b['end_time']);
+    $currentTime = time();
+    $bookingStatus = isset($b['booking_status']) ? strtolower($b['booking_status']) : 'pending';
+    return $bookingTime > $currentTime && $bookingStatus !== 'cancelled';
+});
+
+$total_room_spent = 0;
+$paid_room_bookings = 0;
+foreach ($room_bookings as $booking) {
+    $paymentStatus = isset($booking['payment_status']) ? strtolower($booking['payment_status']) : null;
+    $bookingStatus = isset($booking['booking_status']) ? strtolower($booking['booking_status']) : 'pending';
+    
+    if ($paymentStatus == 'paid' || $paymentStatus == 'approved' || $bookingStatus == 'approved') {
+        $total_room_spent += $booking['total_amount'];
+        $paid_room_bookings++;
+    }
+}
+
+// Calculate statistics for food orders
+$total_food_orders = count($food_orders);
+$total_food_spent = 0;
+$unserved_food_orders = 0;
+$served_food_orders = 0;
+$cancelled_food_orders = 0;
+
+foreach ($food_orders as $order) {
+    $total_food_spent += ($order['price'] * $order['quantity']);
+    
+    switch(strtolower($order['served'])) {
+        case 'pending':
+            $unserved_food_orders++;
+            break;
+        case 'served':
+            $served_food_orders++;
+            break;
+        case 'cancelled':
+            $cancelled_food_orders++;
+            break;
+    }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Bookings - Sirene KTV</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <title>My Bookings & Orders - Sirene KTV</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css-all.min.css">
     <style>
         :root {
             --primary: #1a1a2e;
@@ -56,6 +162,10 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             --danger: #d63031;
             --info: #0984e3;
             --purple: #6c5ce7;
+            --orange: #e67e22;
+            --teal: #008080;
+            --food-payment: #e67e22;
+            --unserved: #e67e22;
         }
 
         * {
@@ -78,6 +188,8 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             justify-content: space-between;
             align-items: center;
             border-bottom: 2px solid var(--highlight);
+            flex-wrap: wrap;
+            gap: 15px;
         }
 
         .header-left h1 {
@@ -98,6 +210,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             display: flex;
             align-items: center;
             gap: 18px;
+            flex-wrap: wrap;
         }
 
         .user-info {
@@ -192,6 +305,55 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             font-size: 14px;
         }
 
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 10px;
+            border-radius: 15px;
+            flex-wrap: wrap;
+        }
+
+        .tab-btn {
+            padding: 15px 30px;
+            border-radius: 10px;
+            border: none;
+            background: transparent;
+            color: rgba(255, 255, 255, 0.6);
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 1;
+            justify-content: center;
+        }
+
+        .tab-btn i {
+            font-size: 18px;
+        }
+
+        .tab-btn.active {
+            background: rgba(233, 69, 96, 0.2);
+            color: var(--highlight);
+        }
+
+        .tab-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--light);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
         .stats-cards {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -233,10 +395,37 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             letter-spacing: 1px;
         }
 
-        .bookings-list {
+        .section-header {
             display: flex;
-            flex-direction: column;
-            gap: 20px;
+            justify-content: space-between;
+            align-items: center;
+            margin: 30px 0 20px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            border-left: 4px solid var(--highlight);
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .section-header h3 {
+            font-size: 22px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .section-header h3 i {
+            color: var(--highlight);
+        }
+
+        .badge {
+            background: var(--highlight);
+            color: white;
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: bold;
         }
 
         .booking-card {
@@ -245,6 +434,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             padding: 25px;
             border: 1px solid rgba(255, 255, 255, 0.1);
             transition: all 0.3s;
+            margin-bottom: 20px;
         }
 
         .booking-card:hover {
@@ -259,6 +449,8 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             margin-bottom: 20px;
             padding-bottom: 15px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            flex-wrap: wrap;
+            gap: 15px;
         }
 
         .booking-id {
@@ -327,6 +519,18 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             border: 1px solid rgba(149, 165, 166, 0.3);
         }
 
+        .status-served {
+            background: rgba(0, 184, 148, 0.2);
+            color: var(--success);
+            border: 1px solid rgba(0, 184, 148, 0.3);
+        }
+
+        .status-unserved {
+            background: rgba(230, 126, 34, 0.2);
+            color: var(--orange);
+            border: 1px solid rgba(230, 126, 34, 0.3);
+        }
+
         .booking-details {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -392,12 +596,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             margin-top: 25px;
             padding-top: 20px;
             border-top: 1px solid rgba(255, 255, 255, 0.1);
-        }
-
-        @media (max-width: 768px) {
-            .booking-actions {
-                flex-direction: column;
-            }
+            flex-wrap: wrap;
         }
 
         .action-btn {
@@ -476,9 +675,126 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             background: linear-gradient(135deg, #e8a822, var(--warning));
         }
 
+        .action-teal {
+            background: linear-gradient(135deg, var(--teal), #006666);
+            color: white;
+        }
+
+        .action-teal:hover {
+            background: linear-gradient(135deg, #006666, var(--teal));
+        }
+
+        .action-food {
+            background: linear-gradient(135deg, var(--food-payment), #d35400);
+            color: white;
+        }
+
+        .action-food:hover {
+            background: linear-gradient(135deg, #d35400, var(--food-payment));
+        }
+
+        .food-items-list {
+            margin: 20px 0;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            padding: 15px;
+        }
+
+        .food-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .food-item:last-child {
+            border-bottom: none;
+        }
+
+        .food-item-details {
+            flex: 2;
+        }
+
+        .food-item-name {
+            font-weight: bold;
+            color: var(--light);
+            margin-bottom: 3px;
+        }
+
+        .food-item-category {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.6);
+        }
+
+        .food-item-quantity {
+            flex: 1;
+            text-align: center;
+            color: var(--light);
+        }
+
+        .food-item-price {
+            flex: 1;
+            text-align: right;
+            color: var(--highlight);
+            font-weight: bold;
+        }
+
+        .food-item-status {
+            flex: 1;
+            text-align: center;
+        }
+
+        .order-summary {
+            background: rgba(233, 69, 96, 0.1);
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .summary-label {
+            color: rgba(255, 255, 255, 0.7);
+            font-size: 14px;
+        }
+
+        .summary-value {
+            color: var(--highlight);
+            font-size: 20px;
+            font-weight: bold;
+        }
+
+        .payment-status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+
+        .payment-status-paid {
+            background: rgba(0, 184, 148, 0.2);
+            color: var(--success);
+            border: 1px solid rgba(0, 184, 148, 0.3);
+        }
+
+        .payment-status-pending {
+            background: rgba(253, 203, 110, 0.2);
+            color: var(--warning);
+            border: 1px solid rgba(253, 203, 110, 0.3);
+        }
+
         .empty-state {
             text-align: center;
             padding: 60px 20px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 15px;
+            margin: 20px 0;
         }
 
         .empty-state i {
@@ -515,22 +831,6 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
 
         .empty-state .btn:hover {
             transform: translateY(-2px);
-        }
-
-        .status-container {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            align-items: flex-end;
-        }
-
-        .booking-approval-status {
-            font-size: 11px;
-            padding: 4px 10px;
-            border-radius: 12px;
-            font-weight: bold;
-            text-transform: uppercase;
-            letter-spacing: 0.3px;
         }
 
         .booking-date-indicator {
@@ -679,7 +979,8 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             font-weight: 500;
         }
 
-        .reason-section select {
+        .reason-section select,
+        .reason-section textarea {
             width: 100%;
             background: rgba(255, 255, 255, 0.1);
             border: 1px solid rgba(255, 255, 255, 0.2);
@@ -691,17 +992,11 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
         }
 
         .reason-section textarea {
-            width: 100%;
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
-            border-radius: 8px;
-            padding: 12px;
-            color: var(--light);
-            font-size: 16px;
             resize: vertical;
             min-height: 100px;
         }
 
+        .reason-section select:focus,
         .reason-section textarea:focus {
             outline: none;
             border-color: var(--danger);
@@ -781,13 +1076,11 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
         @media (max-width: 768px) {
             header {
                 padding: 15px 20px;
-                flex-direction: column;
-                gap: 15px;
             }
             
             .header-right {
-                flex-direction: column;
                 width: 100%;
+                justify-content: center;
             }
             
             .user-info, .back-btn, .logout-btn {
@@ -811,16 +1104,30 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             
             .booking-header {
                 flex-direction: column;
-                gap: 15px;
-                align-items: flex-start;
-            }
-            
-            .status-container {
                 align-items: flex-start;
             }
             
             .booking-details {
                 grid-template-columns: 1fr;
+            }
+            
+            .food-item {
+                flex-direction: column;
+                gap: 10px;
+                text-align: center;
+            }
+            
+            .food-item-details,
+            .food-item-quantity,
+            .food-item-price,
+            .food-item-status {
+                width: 100%;
+                text-align: center;
+            }
+            
+            .order-summary {
+                flex-direction: column;
+                text-align: center;
             }
             
             .modal-content {
@@ -830,6 +1137,14 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             
             .modal-footer {
                 flex-direction: column;
+            }
+            
+            .tabs {
+                flex-direction: column;
+            }
+            
+            .tab-btn {
+                width: 100%;
             }
         }
 
@@ -841,6 +1156,10 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
             .action-btn {
                 min-width: 100%;
             }
+            
+            .booking-actions {
+                flex-direction: column;
+            }
         }
     </style>
 </head>
@@ -848,7 +1167,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
     <header>
         <div class="header-left">
             <h1><i class="fas fa-microphone-alt"></i> Sirene KTV</h1>
-            <p>My Bookings Management</p>
+            <p>My Bookings & Food Orders</p>
         </div>
         <div class="header-right">
             <div class="user-info">
@@ -871,241 +1190,380 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
     <div class="container">
         <div class="page-header">
             <div class="page-title">
-                <h2><i class="fas fa-calendar-check"></i> My Bookings</h2>
-                <p>View and manage all your KTV bookings</p>
+                <h2><i class="fas fa-calendar-check"></i> My Activities</h2>
+                <p>View and manage your room bookings and food orders</p>
             </div>
         </div>
         
-        <?php if (!empty($bookings)): ?>
-            <div class="stats-cards">
-                <div class="stat-card">
-                    <div class="stat-icon"><i class="fas fa-calendar-alt"></i></div>
-                    <div class="stat-number"><?php echo count($bookings); ?></div>
-                    <div class="stat-label">Total Bookings</div>
+        <div class="tabs">
+            <button class="tab-btn active" onclick="showTab('room-bookings')">
+                <i class="fas fa-door-closed"></i> Room Bookings
+                <span class="badge"><?php echo count($room_bookings); ?></span>
+            </button>
+            <button class="tab-btn" onclick="showTab('food-orders')">
+                <i class="fas fa-utensils"></i> Food Orders
+                <span class="badge"><?php echo count($food_orders); ?></span>
+            </button>
+        </div>
+        
+        <!-- Room Bookings Tab -->
+        <div id="room-bookings" class="tab-content active">
+            <?php if (!empty($room_bookings)): ?>
+                <div class="stats-cards">
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-calendar-alt"></i></div>
+                        <div class="stat-number"><?php echo $total_room_bookings; ?></div>
+                        <div class="stat-label">Total Bookings</div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-clock"></i></div>
+                        <div class="stat-number"><?php echo count($upcoming_room_bookings); ?></div>
+                        <div class="stat-label">Upcoming</div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
+                        <div class="stat-number">₱<?php echo number_format($total_room_spent, 2); ?></div>
+                        <div class="stat-label">Total Spent</div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
+                        <div class="stat-number"><?php echo $paid_room_bookings; ?></div>
+                        <div class="stat-label">Paid Bookings</div>
+                    </div>
                 </div>
                 
-                <?php
-                $upcoming = array_filter($bookings, function($b) {
-                    $bookingTime = strtotime($b['booking_date'] . ' ' . $b['end_time']);
-                    $currentTime = time();
-                    $bookingStatus = isset($b['booking_status']) ? strtolower($b['booking_status']) : 'pending';
-                    return $bookingTime > $currentTime && $bookingStatus !== 'cancelled';
-                });
-                ?>
-                <div class="stat-card">
-                    <div class="stat-icon"><i class="fas fa-clock"></i></div>
-                    <div class="stat-number"><?php echo count($upcoming); ?></div>
-                    <div class="stat-label">Upcoming</div>
+                <div class="section-header">
+                    <h3><i class="fas fa-door-closed"></i> Your Room Bookings</h3>
                 </div>
                 
-                <?php
-                $total_spent = 0;
-                $paid_bookings = 0;
-                foreach ($bookings as $booking) {
-                    $paymentStatus = isset($booking['payment_status']) ? strtolower($booking['payment_status']) : null;
-                    $bookingStatus = isset($booking['booking_status']) ? strtolower($booking['booking_status']) : 'pending';
+                <div class="bookings-list">
+                    <?php foreach ($room_bookings as $booking): 
+                        $bookingStatus = isset($booking['booking_status']) ? strtolower($booking['booking_status']) : 'pending';
+                        $paymentStatus = isset($booking['payment_status']) ? strtolower($booking['payment_status']) : 'pending';
+                        
+                        $status_text = 'Pending';
+                        $status_class = 'status-pending';
+                        
+                        if ($bookingStatus == 'cancelled') {
+                            $status_text = 'Cancelled';
+                            $status_class = 'status-cancelled';
+                        } elseif ($bookingStatus == 'completed') {
+                            $status_text = 'Completed';
+                            $status_class = 'status-completed';
+                        } elseif ($paymentStatus == 'paid' || $paymentStatus == 'approved') {
+                            $status_text = 'Paid';
+                            $status_class = 'status-paid';
+                        } elseif ($bookingStatus == 'approved') {
+                            $status_text = 'Approved';
+                            $status_class = 'status-approved';
+                        } elseif ($bookingStatus == 'rejected') {
+                            $status_text = 'Rejected';
+                            $status_class = 'status-rejected';
+                        } elseif ($bookingStatus == 'pending') {
+                            $status_text = 'Pending Approval';
+                            $status_class = 'status-waiting-approval';
+                        } elseif ($bookingStatus == 'confirmed') {
+                            $status_text = 'Confirmed';
+                            $status_class = 'status-confirmed';
+                        }
+                        
+                        $bookingTime = strtotime($booking['booking_date'] . ' ' . $booking['end_time']);
+                        $isUpcoming = $bookingTime > time();
+                        $timeBadge = $isUpcoming ? 'upcoming-badge' : 'past-badge';
+                        $timeBadgeText = $isUpcoming ? 'UPCOMING' : 'PAST';
+                        
+                        $canCancel = ($status_text == 'Pending Approval' || $status_text == 'Approved' || $status_text == 'Confirmed') && 
+                                     $isUpcoming && $bookingStatus != 'cancelled';
+                        
+                        $showPaymentBtn = ($paymentStatus == 'pending' || $paymentStatus == '') && 
+                                         $bookingStatus != 'cancelled' && 
+                                         $bookingStatus != 'rejected' && 
+                                         ($bookingStatus == 'approved' || $bookingStatus == 'confirmed');
+                        
+                        $approvalBadge = '';
+                        $approvalBadgeClass = '';
+                        
+                        if ($bookingStatus == 'pending') {
+                            $approvalBadge = 'Awaiting Admin Approval';
+                            $approvalBadgeClass = 'booking-approval-status status-waiting-approval';
+                        } elseif ($bookingStatus == 'approved') {
+                            $approvalBadge = 'Booking Approved';
+                            $approvalBadgeClass = 'booking-approval-status status-approved';
+                        } elseif ($bookingStatus == 'rejected') {
+                            $approvalBadge = 'Booking Rejected';
+                            $approvalBadgeClass = 'booking-approval-status status-rejected';
+                        }
+                        
+                        $start = new DateTime($booking['start_time']);
+                        $end = new DateTime($booking['end_time']);
+                        $interval = $start->diff($end);
+                        $hours = $interval->h;
+                        $minutes = $interval->i;
+                        $duration = $hours;
+                        if ($minutes > 0) {
+                            $duration .= 'h ' . $minutes . 'm';
+                        } else {
+                            $duration .= ' hours';
+                        }
+                    ?>
+                        <div class="booking-card">
+                            <div class="booking-header">
+                                <div>
+                                    <div class="booking-id">Booking #<?php echo str_pad($booking['b_id'], 6, '0', STR_PAD_LEFT); ?></div>
+                                    <div class="booking-date-indicator">
+                                        <i class="far fa-calendar"></i>
+                                        <?php echo date('F j, Y', strtotime($booking['booking_date'])); ?>
+                                        <span class="<?php echo $timeBadge; ?>"><?php echo $timeBadgeText; ?></span>
+                                    </div>
+                                </div>
+                                <div>
+                                    <?php if ($approvalBadge): ?>
+                                        <div class="<?php echo $approvalBadgeClass; ?>" style="margin-bottom: 10px;">
+                                            <?php echo $approvalBadge; ?>
+                                        </div>
+                                    <?php endif; ?>
+                                    <div class="booking-status <?php echo $status_class; ?>">
+                                        <?php echo $status_text; ?>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="booking-details">
+                                <div class="detail-item">
+                                    <div class="detail-icon"><i class="fas fa-door-closed"></i></div>
+                                    <div class="detail-content">
+                                        <h4>Room</h4>
+                                        <p><?php echo htmlspecialchars($booking['room_name']); ?></p>
+                                    </div>
+                                </div>
+                                
+                                <div class="detail-item">
+                                    <div class="detail-icon"><i class="fas fa-clock"></i></div>
+                                    <div class="detail-content">
+                                        <h4>Time</h4>
+                                        <p>
+                                            <?php echo date('g:i A', strtotime($booking['start_time'])); ?> - 
+                                            <?php echo date('g:i A', strtotime($booking['end_time'])); ?>
+                                        </p>
+                                    </div>
+                                </div>
+                                
+                                <div class="detail-item">
+                                    <div class="detail-icon"><i class="fas fa-user-friends"></i></div>
+                                    <div class="detail-content">
+                                        <h4>Capacity</h4>
+                                        <p><?php echo $booking['capcity']; ?> persons</p>
+                                    </div>
+                                </div>
+                                
+                                <div class="detail-item">
+                                    <div class="detail-icon"><i class="fas fa-hourglass-half"></i></div>
+                                    <div class="detail-content">
+                                        <h4>Duration</h4>
+                                        <p><?php echo $duration; ?></p>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="booking-amount">
+                                <div class="amount-label">Total Amount</div>
+                                <div class="amount-value">₱<?php echo number_format($booking['total_amount'], 2); ?></div>
+                                <?php if ($booking['paid_amount'] > 0): ?>
+                                    <div style="margin-top: 10px; color: rgba(255,255,255,0.7); font-size: 14px;">
+                                        Paid: ₱<?php echo number_format($booking['paid_amount'], 2); ?>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                            
+                            <div class="booking-actions">
+                                <?php if ($showPaymentBtn): ?>
+                                    <a href="payment.php?id=<?php echo $booking['b_id']; ?>" class="action-btn action-primary">
+                                        <i class="fas fa-credit-card"></i> Make Payment
+                                    </a>
+                                <?php endif; ?>
+                                
+                                <?php if ($paymentStatus == 'paid' || $paymentStatus == 'approved' || $bookingStatus == 'completed'): ?>
+                                    <a href="receipt.php?id=<?php echo $booking['b_id']; ?>" class="action-btn action-success">
+                                        <i class="fas fa-receipt"></i> View Receipt
+                                    </a>
+                                <?php endif; ?>
+                                
+                                <a href="booking-details.php?id=<?php echo $booking['b_id']; ?>" class="action-btn action-secondary">
+                                    <i class="fas fa-eye"></i> View Details
+                                </a>
+                                
+                                <?php if (isset($food_orders_by_booking[$booking['b_id']])): ?>
+                                    <a href="javascript:void(0)" onclick="showTab('food-orders')" class="action-btn action-teal">
+                                        <i class="fas fa-utensils"></i> Food Orders (<?php echo count($food_orders_by_booking[$booking['b_id']]['items']); ?>)
+                                    </a>
+                                <?php endif; ?>
+                                
+                                <?php if ($canCancel): ?>
+                                    <button class="action-btn action-danger" onclick="openCancelModal(<?php echo $booking['b_id']; ?>, '<?php echo addslashes($booking['room_name']); ?>', '<?php echo date('F j, Y', strtotime($booking['booking_date'])); ?>', '<?php echo date('g:i A', strtotime($booking['start_time'])); ?>', '<?php echo date('g:i A', strtotime($booking['end_time'])); ?>', <?php echo $booking['total_amount']; ?>)">
+                                        <i class="fas fa-times"></i> Cancel Booking
+                                    </button>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php else: ?>
+                <div class="empty-state">
+                    <i class="fas fa-door-closed"></i>
+                    <h3>No Room Bookings Yet</h3>
+                    <p>You haven't made any room bookings yet. Start your KTV experience by booking a room!</p>
+                    <a href="dashboard.php?tab=rooms" class="btn">
+                        <i class="fas fa-door-closed"></i> Browse Available Rooms
+                    </a>
+                </div>
+            <?php endif; ?>
+        </div>
+        
+        <!-- Food Orders Tab -->
+        <div id="food-orders" class="tab-content">
+            <?php if (!empty($food_orders)): ?>
+                <div class="stats-cards">
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-utensils"></i></div>
+                        <div class="stat-number"><?php echo $total_food_orders; ?></div>
+                        <div class="stat-label">Total Items</div>
+                    </div>
                     
-                    if ($paymentStatus == 'paid' || $paymentStatus == 'approved' || $bookingStatus == 'approved') {
-                        $total_spent += $booking['total_amount'];
-                        $paid_bookings++;
-                    }
-                }
-                ?>
-                <div class="stat-card">
-                    <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
-                    <div class="stat-number">₹<?php echo number_format($total_spent, 2); ?></div>
-                    <div class="stat-label">Total Spent</div>
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-clock"></i></div>
+                        <div class="stat-number"><?php echo $unserved_food_orders; ?></div>
+                        <div class="stat-label">Not Served</div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
+                        <div class="stat-number"><?php echo $served_food_orders; ?></div>
+                        <div class="stat-label">Served</div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
+                        <div class="stat-number">₱<?php echo number_format($total_food_spent, 2); ?></div>
+                        <div class="stat-label">Total Spent</div>
+                    </div>
                 </div>
                 
-                <div class="stat-card">
-                    <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
-                    <div class="stat-number"><?php echo $paid_bookings; ?></div>
-                    <div class="stat-label">Paid Bookings</div>
-                </div>
-            </div>
-            
-            <div class="bookings-list">
-                <?php foreach ($bookings as $booking): 
-                    // Determine overall status - use booking.payment_status since it's in the booking table
-                    $bookingStatus = isset($booking['booking_status']) ? strtolower($booking['booking_status']) : 'pending';
-                    $paymentStatus = isset($booking['payment_status']) ? strtolower($booking['payment_status']) : 'pending';
+                <?php foreach ($food_orders_by_booking as $booking_id => $booking_data): ?>
+                    <div class="section-header">
+                        <h3>
+                            <i class="fas fa-calendar-alt"></i> 
+                            Booking #<?php echo str_pad($booking_id, 6, '0', STR_PAD_LEFT); ?> - <?php echo htmlspecialchars($booking_data['room_name']); ?>
+                        </h3>
+                        <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                            <div class="booking-status <?php 
+                                echo $booking_data['booking_status'] == 'cancelled' ? 'status-cancelled' : 
+                                    ($booking_data['booking_status'] == 'completed' ? 'status-completed' : 'status-approved'); 
+                            ?>">
+                                <?php echo ucfirst($booking_data['booking_status']); ?>
+                            </div>
+                            <?php if ($booking_data['booking_payment_status'] == 'paid' || $booking_data['booking_payment_status'] == 'approved'): ?>
+                                <span class="payment-status-badge payment-status-paid">
+                                    <i class="fas fa-check-circle"></i> Room Paid
+                                </span>
+                            <?php else: ?>
+                                <span class="payment-status-badge payment-status-pending">
+                                    <i class="fas fa-clock"></i> Room Payment Pending
+                                </span>
+                            <?php endif; ?>
+                        </div>
+                    </div>
                     
-                    $status_text = 'Pending';
-                    $status_class = 'status-pending';
-                    
-                    // Priority: cancelled > completed > payment status > booking status
-                    if ($bookingStatus == 'cancelled') {
-                        $status_text = 'Cancelled';
-                        $status_class = 'status-cancelled';
-                    } elseif ($bookingStatus == 'completed') {
-                        $status_text = 'Completed';
-                        $status_class = 'status-completed';
-                    } elseif ($paymentStatus == 'paid' || $paymentStatus == 'approved') {
-                        $status_text = 'Paid';
-                        $status_class = 'status-paid';
-                    } elseif ($bookingStatus == 'approved') {
-                        $status_text = 'Approved';
-                        $status_class = 'status-approved';
-                    } elseif ($bookingStatus == 'rejected') {
-                        $status_text = 'Rejected';
-                        $status_class = 'status-rejected';
-                    } elseif ($bookingStatus == 'pending') {
-                        $status_text = 'Pending Approval';
-                        $status_class = 'status-waiting-approval';
-                    } elseif ($bookingStatus == 'confirmed') {
-                        $status_text = 'Confirmed';
-                        $status_class = 'status-confirmed';
-                    }
-                    
-                    // Check if booking is upcoming
-                    $bookingTime = strtotime($booking['booking_date'] . ' ' . $booking['end_time']);
-                    $isUpcoming = $bookingTime > time();
-                    $timeBadge = $isUpcoming ? 'upcoming-badge' : 'past-badge';
-                    $timeBadgeText = $isUpcoming ? 'UPCOMING' : 'PAST';
-                    
-                    // Determine if booking can be cancelled
-                    $canCancel = ($status_text == 'Pending Approval' || $status_text == 'Approved' || $status_text == 'Confirmed') && 
-                                 $isUpcoming && $bookingStatus != 'cancelled';
-                    
-                    // Determine if payment button should be shown
-                    $showPaymentBtn = ($paymentStatus == 'pending' || $paymentStatus == '') && 
-                                     $bookingStatus != 'cancelled' && 
-                                     $bookingStatus != 'rejected' && 
-                                     ($bookingStatus == 'approved' || $bookingStatus == 'confirmed');
-                    
-                    // Show approval status badge
-                    $approvalBadge = '';
-                    $approvalBadgeClass = '';
-                    
-                    if ($bookingStatus == 'pending') {
-                        $approvalBadge = 'Awaiting Admin Approval';
-                        $approvalBadgeClass = 'booking-approval-status status-waiting-approval';
-                    } elseif ($bookingStatus == 'approved') {
-                        $approvalBadge = 'Booking Approved';
-                        $approvalBadgeClass = 'booking-approval-status status-approved';
-                    } elseif ($bookingStatus == 'rejected') {
-                        $approvalBadge = 'Booking Rejected';
-                        $approvalBadgeClass = 'booking-approval-status status-rejected';
-                    }
-                    
-                    // Calculate hours
-                    $start = new DateTime($booking['start_time']);
-                    $end = new DateTime($booking['end_time']);
-                    $interval = $start->diff($end);
-                    $hours = $interval->h;
-                    $minutes = $interval->i;
-                    $duration = $hours;
-                    if ($minutes > 0) {
-                        $duration .= 'h ' . $minutes . 'm';
-                    } else {
-                        $duration .= ' hours';
-                    }
-                ?>
                     <div class="booking-card">
                         <div class="booking-header">
                             <div>
-                                <div class="booking-id">Booking #<?php echo str_pad($booking['b_id'], 6, '0', STR_PAD_LEFT); ?></div>
                                 <div class="booking-date-indicator">
                                     <i class="far fa-calendar"></i>
-                                    <?php echo date('F j, Y', strtotime($booking['booking_date'])); ?>
-                                    <span class="<?php echo $timeBadge; ?>"><?php echo $timeBadgeText; ?></span>
+                                    <?php echo date('F j, Y', strtotime($booking_data['booking_date'])); ?>
                                 </div>
                             </div>
-                            <div class="status-container">
-                                <?php if ($approvalBadge): ?>
-                                    <div class="<?php echo $approvalBadgeClass; ?>">
-                                        <?php echo $approvalBadge; ?>
+                        </div>
+                        
+                        <div class="food-items-list">
+                            <?php foreach ($booking_data['items'] as $order): ?>
+                                <div class="food-item">
+                                    <div class="food-item-details">
+                                        <div class="food-item-name"><?php echo htmlspecialchars($order['food_name']); ?></div>
+                                        <div class="food-item-category"><?php echo ucfirst($order['category']); ?></div>
                                     </div>
-                                <?php endif; ?>
-                                <div class="booking-status <?php echo $status_class; ?>">
-                                    <?php echo $status_text; ?>
+                                    <div class="food-item-quantity">
+                                        <strong>Qty:</strong> <?php echo $order['quantity']; ?>
+                                    </div>
+                                    <div class="food-item-price">
+                                        ₱<?php echo number_format($order['price'] * $order['quantity'], 2); ?>
+                                        <small style="display: block; font-size: 10px; color: rgba(255,255,255,0.5);">@ ₱<?php echo number_format($order['price'], 2); ?> each</small>
+                                    </div>
+                                    <div class="food-item-status">
+                                        <span class="booking-status <?php 
+                                            echo $order['served'] == 'served' ? 'status-served' : 
+                                                ($order['served'] == 'cancelled' ? 'status-cancelled' : 'status-unserved'); 
+                                        ?>">
+                                            <?php 
+                                                if ($order['served'] == 'served') {
+                                                    echo 'SERVED';
+                                                } elseif ($order['served'] == 'cancelled') {
+                                                    echo 'CANCELLED';
+                                                } else {
+                                                    echo 'NOT SERVED';
+                                                }
+                                            ?>
+                                        </span>
+                                    </div>
                                 </div>
-                            </div>
+                            <?php endforeach; ?>
                         </div>
                         
-                        <div class="booking-details">
-                            <div class="detail-item">
-                                <div class="detail-icon"><i class="fas fa-door-closed"></i></div>
-                                <div class="detail-content">
-                                    <h4>Room</h4>
-                                    <p><?php echo htmlspecialchars($booking['room_name']); ?></p>
-                                </div>
-                            </div>
-                            
-                            <div class="detail-item">
-                                <div class="detail-icon"><i class="fas fa-clock"></i></div>
-                                <div class="detail-content">
-                                    <h4>Time</h4>
-                                    <p>
-                                        <?php echo date('g:i A', strtotime($booking['start_time'])); ?> - 
-                                        <?php echo date('g:i A', strtotime($booking['end_time'])); ?>
-                                    </p>
-                                </div>
-                            </div>
-                            
-                            <div class="detail-item">
-                                <div class="detail-icon"><i class="fas fa-user-friends"></i></div>
-                                <div class="detail-content">
-                                    <h4>Capacity</h4>
-                                    <p><?php echo $booking['capcity']; ?> persons</p>
-                                </div>
-                            </div>
-                            
-                            <div class="detail-item">
-                                <div class="detail-icon"><i class="fas fa-hourglass-half"></i></div>
-                                <div class="detail-content">
-                                    <h4>Duration</h4>
-                                    <p><?php echo $duration; ?></p>
-                                </div>
-                            </div>
-                        </div>
-                        
-                        <div class="booking-amount">
-                            <div class="amount-label">Total Amount</div>
-                            <div class="amount-value">₹<?php echo number_format($booking['total_amount'], 2); ?></div>
-                            <?php if ($booking['paid_amount'] > 0): ?>
-                                <div style="margin-top: 10px; color: rgba(255,255,255,0.7); font-size: 14px;">
-                                    Paid: ₹<?php echo number_format($booking['paid_amount'], 2); ?>
-                                </div>
-                            <?php endif; ?>
+                        <div class="order-summary">
+                            <span class="summary-label">Total Food Amount:</span>
+                            <span class="summary-value">₱<?php echo number_format($booking_data['total'], 2); ?></span>
                         </div>
                         
                         <div class="booking-actions">
-                            <?php if ($showPaymentBtn): ?>
-                                <a href="payment.php?id=<?php echo $booking['b_id']; ?>" class="action-btn action-primary">
-                                    <i class="fas fa-credit-card"></i> Make Payment
-                                </a>
-                            <?php endif; ?>
-                            
-                            <?php if ($paymentStatus == 'paid' || $paymentStatus == 'approved' || $bookingStatus == 'completed'): ?>
-                                <a href="receipt.php?id=<?php echo $booking['b_id']; ?>" class="action-btn action-success">
-                                    <i class="fas fa-receipt"></i> View Receipt
-                                </a>
-                            <?php endif; ?>
-                            
-                            <a href="booking-details.php?id=<?php echo $booking['b_id']; ?>" class="action-btn action-secondary">
-                                <i class="fas fa-eye"></i> View Details
+                            <a href="booking-details.php?id=<?php echo $booking_id; ?>" class="action-btn action-secondary">
+                                <i class="fas fa-eye"></i> View Booking Details
                             </a>
                             
-                            <?php if ($canCancel): ?>
-                                <button class="action-btn action-danger" onclick="openCancelModal(<?php echo $booking['b_id']; ?>, '<?php echo addslashes($booking['room_name']); ?>', '<?php echo date('F j, Y', strtotime($booking['booking_date'])); ?>', '<?php echo date('g:i A', strtotime($booking['start_time'])); ?>', '<?php echo date('g:i A', strtotime($booking['end_time'])); ?>', <?php echo $booking['total_amount']; ?>)">
-                                    <i class="fas fa-times"></i> Cancel Booking
-                                </button>
+                            <?php if ($booking_data['booking_status'] != 'cancelled' && $booking_data['booking_status'] != 'completed'): ?>
+                                <?php if ($booking_data['has_unserved_items']): ?>
+                                    <!-- Pay for Food Button - Uses your existing payment.php with food items -->
+                                    <a href="payment.php?id=<?php echo $booking_id; ?>&type=food_only" class="action-btn action-food">
+                                        <i class="fas fa-credit-card"></i> Pay for Food (₱<?php echo number_format($booking_data['total'], 2); ?>)
+                                    </a>
+                                <?php endif; ?>
+                                
+                                <?php if (!$booking_data['all_served']): ?>
+                                    <a href="order-food.php?booking_id=<?php echo $booking_id; ?>" class="action-btn action-primary">
+                                        <i class="fas fa-plus-circle"></i> Add More Items
+                                    </a>
+                                <?php endif; ?>
+                            <?php endif; ?>
+                            
+                            <?php if ($booking_data['all_served'] && $booking_data['total'] > 0): ?>
+                                <span class="action-btn action-success" style="cursor: default; opacity: 0.7;">
+                                    <i class="fas fa-check-circle"></i> All Items Served
+                                </span>
                             <?php endif; ?>
                         </div>
                     </div>
                 <?php endforeach; ?>
-            </div>
-        <?php else: ?>
-            <div class="empty-state">
-                <i class="fas fa-calendar-times"></i>
-                <h3>No Bookings Yet</h3>
-                <p>You haven't made any bookings yet. Start your KTV experience by booking a room!</p>
-                <a href="dashboard.php?tab=rooms" class="btn">
-                    <i class="fas fa-door-closed"></i> Browse Available Rooms
-                </a>
-            </div>
-        <?php endif; ?>
+            <?php else: ?>
+                <div class="empty-state">
+                    <i class="fas fa-utensils"></i>
+                    <h3>No Food Orders Yet</h3>
+                    <p>You haven't ordered any food items with your bookings yet.</p>
+                    <a href="dashboard.php?tab=rooms" class="btn">
+                        <i class="fas fa-door-closed"></i> Book a Room First
+                    </a>
+                </div>
+            <?php endif; ?>
+        </div>
     </div>
 
     <!-- Cancel Booking Modal -->
@@ -1123,7 +1581,7 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                 
                 <div class="warning-message">
                     <i class="fas fa-exclamation-circle"></i>
-                    <strong>Warning:</strong> Cancelling a booking cannot be undone. You may be subject to cancellation fees depending on how close to the booking date you cancel.
+                    <strong>Warning:</strong> Cancelling a booking cannot be undone. All associated food orders will also be cancelled.
                 </div>
                 
                 <form id="cancelForm" method="POST" action="cancel-booking.php">
@@ -1171,13 +1629,52 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
     </footer>
 
     <script>
+        function showTab(tabId) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            
+            // Remove active class from all tab buttons
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            // Show selected tab
+            document.getElementById(tabId).classList.add('active');
+            
+            // Add active class to clicked button
+            event.target.classList.add('active');
+            
+            // Store active tab in session storage
+            sessionStorage.setItem('activeTab', tabId);
+        }
+        
+        // Check for saved tab preference
+        document.addEventListener('DOMContentLoaded', function() {
+            const activeTab = sessionStorage.getItem('activeTab');
+            if (activeTab) {
+                showTab(activeTab);
+            }
+            
+            // Animate cards
+            const cards = document.querySelectorAll('.booking-card');
+            cards.forEach((card, index) => {
+                card.style.opacity = '0';
+                card.style.transform = 'translateY(20px)';
+                setTimeout(() => {
+                    card.style.transition = 'opacity 0.5s, transform 0.5s';
+                    card.style.opacity = '1';
+                    card.style.transform = 'translateY(0)';
+                }, index * 100);
+            });
+        });
+        
         function openCancelModal(bookingId, roomName, bookingDate, startTime, endTime, totalAmount) {
             currentBookingId = bookingId;
             
-            // Set the booking ID in the form
             document.getElementById('cancelBookingId').value = bookingId;
             
-            // Update modal booking info
             const modalContent = document.getElementById('modalBookingInfo');
             modalContent.innerHTML = `
                 <div class="info-row">
@@ -1198,14 +1695,11 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                 </div>
                 <div class="info-row">
                     <span class="info-label">Amount:</span>
-                    <span class="info-value" style="color: var(--highlight);">₹${parseFloat(totalAmount).toFixed(2)}</span>
+                    <span class="info-value" style="color: var(--highlight);">₱${parseFloat(totalAmount).toFixed(2)}</span>
                 </div>
             `;
             
-            // Show the modal
             document.getElementById('cancelModal').style.display = 'flex';
-            
-            // Prevent body scrolling
             document.body.style.overflow = 'hidden';
         }
         
@@ -1259,32 +1753,16 @@ $bookings = $bookings_result->fetch_all(MYSQLI_ASSOC);
                 return false;
             }
             
-            // Ask for confirmation
-            if (!confirm('Are you sure you want to cancel this booking? This action cannot be undone.')) {
+            if (!confirm('Are you sure you want to cancel this booking? All associated food orders will also be cancelled. This action cannot be undone.')) {
                 e.preventDefault();
                 return false;
             }
             
-            // Show loading state
             const confirmBtn = this.querySelector('.modal-btn-confirm');
             confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
             confirmBtn.disabled = true;
             
             return true;
-        });
-        
-        // Add page load animation
-        document.addEventListener('DOMContentLoaded', function() {
-            const bookings = document.querySelectorAll('.booking-card');
-            bookings.forEach((card, index) => {
-                card.style.opacity = '0';
-                card.style.transform = 'translateY(20px)';
-                setTimeout(() => {
-                    card.style.transition = 'opacity 0.5s, transform 0.5s';
-                    card.style.opacity = '1';
-                    card.style.transform = 'translateY(0)';
-                }, index * 100);
-            });
         });
     </script>
 </body>

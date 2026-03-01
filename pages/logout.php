@@ -13,21 +13,6 @@ if (ini_get("session.use_cookies")) {
     );
 }
 
-// Destroy the session
-session_destroy();
-
-// Clear browser cache to prevent back button access
-header("Cache-Control: no-cache, no-store, must-revalidate"); // HTTP 1.1
-header("Pragma: no-cache"); // HTTP 1.0
-header("Expires: 0"); // Proxies
-
-// JavaScript to clear browser history (prevents back button)
-echo '<script type="text/javascript">
-    window.history.forward();
-    function noBack() {
-        window.history.forward();
-    }
-</script>';
 
 // Redirect to landing page with delay
 header("Refresh: 0; url=landingpage.php");
