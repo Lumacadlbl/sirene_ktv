@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Feb 27, 2026 at 02:36 PM
+-- Generation Time: Mar 02, 2026 at 12:36 AM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -45,17 +45,9 @@ CREATE TABLE `booking` (
   `payment_status` varchar(100) NOT NULL,
   `downpayment` decimal(10,2) DEFAULT NULL,
   `paymongo_payment_id` varchar(100) DEFAULT NULL,
+  `store_payment_id` varchar(100) DEFAULT NULL,
   `created_at` int(50) NOT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
---
--- Dumping data for table `booking`
---
-
-INSERT INTO `booking` (`b_id`, `u_id`, `r_id`, `booking_date`, `start_time`, `end_time`, `hours`, `room_amount`, `food_amount`, `subtotal`, `tax_amount`, `total_amount`, `notes`, `status`, `payment_status`, `downpayment`, `paymongo_payment_id`, `created_at`) VALUES
-(33, 13, 7, '2026-02-28 00:00:00', '18:00:00', '20:00:00', 2, 240, 0, 240, 24, 264, NULL, 'confirmed', 'paid', 264.00, 'cs_957925494a312e9390458547', 2147483647),
-(34, 13, 6, '2026-02-28 00:00:00', '18:00:00', '20:00:00', 2, 400, 0, 400, 40, 440, NULL, 'confirmed', 'pending', NULL, NULL, 2147483647),
-(35, 14, 7, '2026-02-28 00:00:00', '20:00:00', '23:00:00', 3, 360, 0, 360, 36, 396, NULL, 'confirmed', 'paid', 396.00, 'cs_f49a8778c59d707daae979a7', 2147483647);
 
 -- --------------------------------------------------------
 
@@ -70,24 +62,9 @@ CREATE TABLE `booking_food` (
   `quantity` int(11) NOT NULL,
   `price` decimal(10,2) NOT NULL,
   `served` enum('pending','served','cancelled') DEFAULT 'pending',
-  `payment_id` varchar(100) DEFAULT NULL
+  `payment_id` varchar(100) DEFAULT NULL,
+  `order_time` timestamp NOT NULL DEFAULT current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
---
--- Dumping data for table `booking_food`
---
-
-INSERT INTO `booking_food` (`bf_id`, `b_id`, `f_id`, `quantity`, `price`, `served`, `payment_id`) VALUES
-(27, 33, 36, 6, 90.00, 'served', 'cs_e7e923ae9d4cd33663a6b085'),
-(28, 33, 53, 3, 220.00, 'served', 'cs_e7e923ae9d4cd33663a6b085'),
-(29, 33, 57, 5, 120.00, 'served', 'cs_e7e923ae9d4cd33663a6b085'),
-(30, 33, 55, 1, 200.00, 'served', 'cs_e7e923ae9d4cd33663a6b085'),
-(31, 33, 4, 4, 220.00, 'served', 'cs_e7e923ae9d4cd33663a6b085'),
-(32, 33, 8, 6, 280.00, 'served', 'cs_957925494a312e9390458547'),
-(33, 35, 10, 4, 300.00, 'pending', NULL),
-(34, 35, 4, 1, 220.00, 'pending', NULL),
-(35, 35, 14, 1, 320.00, 'pending', NULL),
-(36, 35, 47, 1, 200.00, 'pending', NULL);
 
 -- --------------------------------------------------------
 
@@ -114,43 +91,44 @@ CREATE TABLE `food_beverages` (
   `category` varchar(50) NOT NULL,
   `price` decimal(10,2) NOT NULL,
   `stock` int(11) NOT NULL DEFAULT 0,
-  `created_at` timestamp NOT NULL DEFAULT current_timestamp()
+  `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
+  `preparation_time` int(11) DEFAULT 15 COMMENT 'Preparation time in minutes'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
 
 --
 -- Dumping data for table `food_beverages`
 --
 
-INSERT INTO `food_beverages` (`f_id`, `item_name`, `category`, `price`, `stock`, `created_at`) VALUES
-(4, 'Spring Rolls (Veg)', 'Appetizer', 220.00, 40, '2026-02-06 08:09:40'),
-(5, 'Cheese Balls', 'Appetizer', 200.00, 45, '2026-02-06 08:09:40'),
-(7, 'Chicken Wings', 'Appetizer', 320.00, 35, '2026-02-06 08:09:40'),
-(8, 'Paneer Tikka', 'Appetizer', 280.00, 40, '2026-02-06 08:09:40'),
-(10, 'Chicken Lollipop', 'Appetizer', 300.00, 30, '2026-02-06 08:09:40'),
-(12, 'Chicken Biryani', 'Main Course', 350.00, 30, '2026-02-06 08:09:40'),
-(14, 'Paneer Butter Masala', 'Main Course', 320.00, 35, '2026-02-06 08:09:40'),
-(15, 'Fish & Chips', 'Main Course', 400.00, 20, '2026-02-06 08:09:40'),
-(18, 'Veg Hakka Noodles', 'Main Course', 280.00, 40, '2026-02-06 08:09:40'),
-(22, 'Chicken Burger', 'Snacks', 280.00, 40, '2026-02-06 08:09:40'),
-(25, 'Nachos with Cheese', 'Snacks', 300.00, 30, '2026-02-06 08:09:40'),
-(27, 'Chicken Wrap', 'Snacks', 260.00, 35, '2026-02-06 08:09:40'),
-(29, 'Masala Fries', 'Snacks', 210.00, 40, '2026-02-06 08:09:40'),
-(31, 'Chicken Hot Dog', 'Snacks', 220.00, 40, '2026-02-06 08:09:40'),
-(32, 'Coca-Cola (500ml)', 'Beverage', 80.00, 100, '2026-02-06 08:09:40'),
-(33, 'Fresh Lime Soda', 'Beverage', 100.00, 80, '2026-02-06 08:09:40'),
-(34, 'Iced Tea', 'Beverage', 120.00, 70, '2026-02-06 08:09:40'),
-(35, 'Virgin Mojito', 'Beverage', 150.00, 60, '2026-02-06 08:09:40'),
-(36, 'Hot Coffee', 'Beverage', 90.00, 90, '2026-02-06 08:09:40'),
-(43, 'Whisky (60ml)', 'Alcoholic', 350.00, 60, '2026-02-06 08:09:40'),
-(47, 'Tequila Shot', 'Alcoholic', 200.00, 70, '2026-02-06 08:09:40'),
-(49, 'Gin (60ml)', 'Alcoholic', 340.00, 50, '2026-02-06 08:09:40'),
-(50, 'Brandy (60ml)', 'Alcoholic', 320.00, 45, '2026-02-06 08:09:40'),
-(51, 'Champagne (Glass)', 'Alcoholic', 400.00, 30, '2026-02-06 08:09:40'),
-(53, 'Ice Cream Sundae', 'Dessert', 220.00, 35, '2026-02-06 08:09:40'),
-(54, 'Cheesecake Slice', 'Dessert', 250.00, 30, '2026-02-06 08:09:40'),
-(55, 'Chocolate Mousse', 'Dessert', 200.00, 45, '2026-02-06 08:09:40'),
-(56, 'Fruit Salad', 'Dessert', 150.00, 50, '2026-02-06 08:09:40'),
-(57, 'Gulab Jamun', 'Dessert', 120.00, 60, '2026-02-06 08:09:40');
+INSERT INTO `food_beverages` (`f_id`, `item_name`, `category`, `price`, `stock`, `created_at`, `preparation_time`) VALUES
+(4, 'Spring Rolls (Veg)', 'Appetizer', 220.00, 44, '2026-02-06 08:09:40', 15),
+(5, 'Cheese Balls', 'Appetizer', 200.00, 45, '2026-02-06 08:09:40', 15),
+(7, 'Chicken Wings', 'Appetizer', 320.00, 35, '2026-02-06 08:09:40', 15),
+(8, 'Paneer Tikka', 'Appetizer', 280.00, 46, '2026-02-06 08:09:40', 15),
+(10, 'Chicken Lollipop', 'Appetizer', 300.00, 30, '2026-02-06 08:09:40', 15),
+(12, 'Chicken Biryani', 'Main Course', 350.00, 30, '2026-02-06 08:09:40', 15),
+(14, 'Paneer Butter Masala', 'Main Course', 320.00, 35, '2026-02-06 08:09:40', 15),
+(15, 'Fish & Chips', 'Main Course', 400.00, 20, '2026-02-06 08:09:40', 15),
+(18, 'Veg Hakka Noodles', 'Main Course', 280.00, 40, '2026-02-06 08:09:40', 15),
+(22, 'Chicken Burger', 'Snacks', 280.00, 40, '2026-02-06 08:09:40', 15),
+(25, 'Nachos with Cheese', 'Snacks', 300.00, 30, '2026-02-06 08:09:40', 15),
+(27, 'Chicken Wrap', 'Snacks', 260.00, 35, '2026-02-06 08:09:40', 15),
+(29, 'Masala Fries', 'Snacks', 210.00, 40, '2026-02-06 08:09:40', 15),
+(31, 'Chicken Hot Dog', 'Snacks', 220.00, 40, '2026-02-06 08:09:40', 15),
+(32, 'Coca-Cola (500ml)', 'Beverage', 80.00, 100, '2026-02-06 08:09:40', 15),
+(33, 'Fresh Lime Soda', 'Beverage', 100.00, 80, '2026-02-06 08:09:40', 15),
+(34, 'Iced Tea', 'Beverage', 120.00, 70, '2026-02-06 08:09:40', 15),
+(35, 'Virgin Mojito', 'Beverage', 150.00, 60, '2026-02-06 08:09:40', 15),
+(36, 'Hot Coffee', 'Beverage', 90.00, 96, '2026-02-06 08:09:40', 15),
+(43, 'Whisky (60ml)', 'Alcoholic', 350.00, 60, '2026-02-06 08:09:40', 15),
+(47, 'Tequila Shot', 'Alcoholic', 200.00, 70, '2026-02-06 08:09:40', 15),
+(49, 'Gin (60ml)', 'Alcoholic', 340.00, 50, '2026-02-06 08:09:40', 15),
+(50, 'Brandy (60ml)', 'Alcoholic', 320.00, 45, '2026-02-06 08:09:40', 15),
+(51, 'Champagne (Glass)', 'Alcoholic', 400.00, 30, '2026-02-06 08:09:40', 15),
+(53, 'Ice Cream Sundae', 'Dessert', 220.00, 38, '2026-02-06 08:09:40', 15),
+(54, 'Cheesecake Slice', 'Dessert', 250.00, 30, '2026-02-06 08:09:40', 15),
+(55, 'Chocolate Mousse', 'Dessert', 200.00, 46, '2026-02-06 08:09:40', 15),
+(56, 'Fruit Salad', 'Dessert', 150.00, 50, '2026-02-06 08:09:40', 15),
+(57, 'Gulab Jamun', 'Dessert', 120.00, 65, '2026-02-06 08:09:40', 15);
 
 -- --------------------------------------------------------
 
@@ -167,17 +145,6 @@ CREATE TABLE `payments` (
   `amount` decimal(10,2) NOT NULL,
   `payment_date` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci;
-
---
--- Dumping data for table `payments`
---
-
-INSERT INTO `payments` (`p_id`, `b_id`, `u_id`, `payment_method`, `payment_status`, `amount`, `payment_date`) VALUES
-(25, 33, 13, 'card', 'paid', 804.00, '2026-02-27 12:31:57'),
-(26, 33, 13, 'paymaya', 'paid', 804.00, '2026-02-27 12:31:57'),
-(27, 33, 13, 'card', 'pending', 2880.00, '2026-02-27 13:10:45'),
-(28, 33, 13, 'gcash', 'pending', 1680.00, '2026-02-27 13:19:31'),
-(29, 35, 14, 'paymaya', 'paid', 2336.00, '2026-02-27 13:35:18');
 
 -- --------------------------------------------------------
 
@@ -288,13 +255,13 @@ ALTER TABLE `user_tbl`
 -- AUTO_INCREMENT for table `booking`
 --
 ALTER TABLE `booking`
-  MODIFY `b_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=36;
+  MODIFY `b_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=37;
 
 --
 -- AUTO_INCREMENT for table `booking_food`
 --
 ALTER TABLE `booking_food`
-  MODIFY `bf_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=37;
+  MODIFY `bf_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=42;
 
 --
 -- AUTO_INCREMENT for table `extra_expense`
@@ -312,7 +279,7 @@ ALTER TABLE `food_beverages`
 -- AUTO_INCREMENT for table `payments`
 --
 ALTER TABLE `payments`
-  MODIFY `p_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=30;
+  MODIFY `p_id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=34;
 
 --
 -- AUTO_INCREMENT for table `room`
