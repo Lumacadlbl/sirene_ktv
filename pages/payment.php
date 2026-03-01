@@ -44,6 +44,12 @@ if ($check_paymongo->num_rows == 0) {
     $conn->query("ALTER TABLE booking ADD COLUMN paymongo_payment_id VARCHAR(100) NULL AFTER downpayment");
 }
 
+// Check if store_payment_id column exists
+$check_store_payment = $conn->query("SHOW COLUMNS FROM booking LIKE 'store_payment_id'");
+if ($check_store_payment->num_rows == 0) {
+    $conn->query("ALTER TABLE booking ADD COLUMN store_payment_id VARCHAR(100) NULL AFTER paymongo_payment_id");
+}
+
 // Check if payment_id column exists in booking_food
 $check_food_payment = $conn->query("SHOW COLUMNS FROM booking_food LIKE 'payment_id'");
 if ($check_food_payment->num_rows == 0) {
@@ -294,29 +300,61 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) 
     
     error_log("Payment amount: $amount_to_pay, Method: $payment_method");
     
-    if ($payment_method == 'store' && !$is_food_only) {
-        // Handle store payment (only for full payment, not for food-only)
+    if ($payment_method == 'store') {
+        // Handle store payment for both full and food-only
         try {
             $conn->begin_transaction();
             
-            // Update booking
-            $update = $conn->prepare("UPDATE booking SET payment_status = 'pending_store', downpayment = ? WHERE b_id = ?");
-            $update->bind_param("di", $downpayment, $booking_id);
-            $update->execute();
-            
-            // Insert into payments table
-            $payment_insert = $conn->prepare("
-                INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
-                VALUES (?, ?, 'store', 'pending', ?, NOW())
-            ");
-            $payment_insert->bind_param("iid", $booking_id, $user_id, $downpayment);
-            $payment_insert->execute();
-            
-            $conn->commit();
-            
-            error_log("Store payment recorded, redirecting to success page");
-            header("Location: payment-success.php?booking_id=" . $booking_id . "&method=store");
-            exit;
+            if ($is_food_only) {
+                // For food-only store payment
+                // Update booking_food records with a store payment identifier
+                $store_payment_id = 'STORE_' . uniqid() . '_' . date('YmdHis');
+                
+                $update = $conn->prepare("UPDATE booking_food SET payment_id = ? WHERE b_id = ? AND (payment_id IS NULL OR payment_id = '')");
+                $update->bind_param("si", $store_payment_id, $booking_id);
+                $update->execute();
+                $updated_count = $update->affected_rows;
+                error_log("Updated $updated_count food items with store payment ID: $store_payment_id");
+                
+                // Update booking to track store payment
+                $update_booking = $conn->prepare("UPDATE booking SET store_payment_id = ? WHERE b_id = ?");
+                $update_booking->bind_param("si", $store_payment_id, $booking_id);
+                $update_booking->execute();
+                
+                // Insert into payments table
+                $payment_insert = $conn->prepare("
+                    INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
+                    VALUES (?, ?, 'store', 'pending', ?, NOW())
+                ");
+                $payment_insert->bind_param("iid", $booking_id, $user_id, $unpaid_food_total);
+                $payment_insert->execute();
+                
+                $conn->commit();
+                
+                error_log("Store food payment recorded, redirecting to success page");
+                header("Location: payment-success.php?booking_id=" . $booking_id . "&method=store&type=food_only");
+                exit;
+                
+            } else {
+                // For full payment store payment (downpayment only)
+                $update = $conn->prepare("UPDATE booking SET payment_status = 'pending_store', downpayment = ? WHERE b_id = ?");
+                $update->bind_param("di", $downpayment, $booking_id);
+                $update->execute();
+                
+                // Insert into payments table
+                $payment_insert = $conn->prepare("
+                    INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
+                    VALUES (?, ?, 'store', 'pending', ?, NOW())
+                ");
+                $payment_insert->bind_param("iid", $booking_id, $user_id, $downpayment);
+                $payment_insert->execute();
+                
+                $conn->commit();
+                
+                error_log("Store payment recorded, redirecting to success page");
+                header("Location: payment-success.php?booking_id=" . $booking_id . "&method=store");
+                exit;
+            }
             
         } catch (Exception $e) {
             $conn->rollback();
@@ -991,7 +1029,7 @@ if (isset($no_food_error)) {
 
         .payment-grid {
             display: grid;
-            grid-template-columns: <?php echo $is_food_only ? 'repeat(3, 1fr)' : 'repeat(4, 1fr)'; ?>;
+            grid-template-columns: <?php echo $is_food_only ? 'repeat(4, 1fr)' : 'repeat(4, 1fr)'; ?>;
             gap: 20px;
             margin: 25px 0;
         }
@@ -1409,8 +1447,7 @@ if (isset($no_food_error)) {
     </style>
 </head>
 <body>
-    <!-- Store Payment Modal (only show if not food-only) -->
-    <?php if (!$is_food_only): ?>
+    <!-- Store Payment Modal (show for both full and food-only) -->
     <div class="modal-overlay" id="storeModal">
         <div class="modal-container modal-store">
             <button class="modal-close" onclick="closeModal('storeModal')">
@@ -1422,20 +1459,26 @@ if (isset($no_food_error)) {
             <h2 class="modal-title">Confirm Store Payment</h2>
             <p class="modal-message">Please confirm your store payment details</p>
             <div class="modal-details">
+                <?php if (!$is_food_only): ?>
                 <div class="modal-detail-item">
                     <span class="modal-detail-label">Room Total:</span>
                     <span class="modal-detail-value">₱<?php echo number_format($room_total, 2); ?></span>
                 </div>
+                <?php endif; ?>
+                
                 <?php if ($unpaid_food_total > 0): ?>
                 <div class="modal-detail-item">
                     <span class="modal-detail-label">Food Total:</span>
                     <span class="modal-detail-value">₱<?php echo number_format($unpaid_food_total, 2); ?></span>
                 </div>
                 <?php endif; ?>
+                
                 <div class="modal-detail-item">
-                    <span class="modal-detail-label">Grand Total:</span>
-                    <span class="modal-detail-value">₱<?php echo number_format($grand_total, 2); ?></span>
+                    <span class="modal-detail-label">Total Amount:</span>
+                    <span class="modal-detail-value">₱<?php echo number_format($is_food_only ? $unpaid_food_total : $grand_total, 2); ?></span>
                 </div>
+                
+                <?php if (!$is_food_only): ?>
                 <div class="modal-detail-item">
                     <span class="modal-detail-label">Downpayment (20%):</span>
                     <span class="modal-detail-value" style="color: var(--warning);">₱<?php echo number_format($downpayment, 2); ?></span>
@@ -1444,6 +1487,13 @@ if (isset($no_food_error)) {
                     <span class="modal-detail-label">Remaining Balance:</span>
                     <span class="modal-detail-value">₱<?php echo number_format($remaining, 2); ?></span>
                 </div>
+                <?php else: ?>
+                <div class="modal-detail-item">
+                    <span class="modal-detail-label">Payment Type:</span>
+                    <span class="modal-detail-value" style="color: var(--food);">Food Only</span>
+                </div>
+                <?php endif; ?>
+                
                 <?php if (!empty($unpaid_food_items)): ?>
                 <div class="modal-food-items">
                     <div class="modal-food-title">
@@ -1470,7 +1520,6 @@ if (isset($no_food_error)) {
             </div>
         </div>
     </div>
-    <?php endif; ?>
 
     <!-- GCash Payment Modal -->
     <div class="modal-overlay" id="gcashModal">
@@ -1847,17 +1896,15 @@ if (isset($no_food_error)) {
                     <span class="payment-badge">PayMongo</span>
                 </div>
 
-                <!-- Pay at Store (only for full payment) -->
-                <?php if (!$is_food_only): ?>
+                <!-- Pay at Store (show for both full and food-only) -->
                 <div class="payment-card store" onclick="showModal('storeModal')">
                     <div class="payment-icon">
                         <i class="fas fa-store"></i>
                     </div>
                     <h4 class="payment-name">Pay at Store</h4>
                     <p class="payment-desc">Pay in person</p>
-                    <span class="payment-badge">20% Downpayment</span>
+                    <span class="payment-badge"><?php echo $is_food_only ? 'Food Only' : '20% Downpayment'; ?></span>
                 </div>
-                <?php endif; ?>
             </div>
 
             <!-- Payment Instructions -->
@@ -1875,10 +1922,10 @@ if (isset($no_food_error)) {
                         <i class="fas fa-credit-card"></i>
                         <span><strong>Card:</strong> Secure 3D Secure checkout</span>
                     </div>
-                    <?php if (!$is_food_only): ?>
+                    <?php if ($unpaid_food_total > 0): ?>
                     <div class="instruction-item">
                         <i class="fas fa-store"></i>
-                        <span><strong>Store:</strong> Pay 20% downpayment at store</span>
+                        <span><strong>Store:</strong> Pay <?php echo $is_food_only ? 'full amount' : '20% downpayment'; ?> at store</span>
                     </div>
                     <?php endif; ?>
                     <div class="instruction-item">

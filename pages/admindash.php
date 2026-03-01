@@ -133,6 +133,27 @@ if (isset($_GET['delete_whole_order'])) {
     exit;
 }
 
+// ===== UPDATE FOOD ORDER SERVED STATUS (INDIVIDUAL ITEM) =====
+if (isset($_POST['update_food_item_status'])) {
+    $bf_id = (int)$_POST['bf_id'];
+    $served_status = $_POST['served_status'];
+    $b_id = (int)$_POST['b_id'];
+    
+    // Update specific food item
+    $stmt = $conn->prepare("UPDATE booking_food SET served = ? WHERE bf_id = ?");
+    $stmt->bind_param("si", $served_status, $bf_id);
+    
+    if ($stmt->execute()) {
+        $_SESSION['success'] = "Food item status updated to: $served_status";
+    } else {
+        $_SESSION['error'] = "Failed to update food item status: " . $conn->error;
+    }
+    
+    $stmt->close();
+    header("Location: admindash.php#food-orders");
+    exit;
+}
+
 // ===== UPDATE FOOD ORDER SERVED STATUS (WHOLE ORDER) =====
 if (isset($_POST['update_food_order_status'])) {
     $b_id = (int)$_POST['b_id'];
@@ -196,11 +217,12 @@ if (isset($_POST['add_booking_food'])) {
     $quantity = (int)$_POST['quantity'];
     
     // Get food price and check stock
-    $food_result = $conn->query("SELECT price, item_name, stock FROM food_beverages WHERE f_id = $f_id");
+    $food_result = $conn->query("SELECT price, item_name, stock, preparation_time FROM food_beverages WHERE f_id = $f_id");
     $food = $food_result->fetch_assoc();
     $price = $food['price'];
     $total = $price * $quantity;
     $current_stock = $food['stock'];
+    $prep_time = $food['preparation_time'] ?? 15;
     
     if ($current_stock >= $quantity) {
         // Insert into booking_food with served status default 'pending'
@@ -252,13 +274,14 @@ if (isset($_POST['update_room'])) {
 if (isset($_POST['update_food'])) {
     $food_id = $_POST['food_id'];
     $stock = $_POST['stock'];
+    $preparation_time = $_POST['preparation_time'] ?? 15;
 
-    $stmt = $conn->prepare("UPDATE food_beverages SET stock=? WHERE f_id=?");
-    $stmt->bind_param("ii", $stock, $food_id);
+    $stmt = $conn->prepare("UPDATE food_beverages SET stock=?, preparation_time=? WHERE f_id=?");
+    $stmt->bind_param("iii", $stock, $preparation_time, $food_id);
     if ($stmt->execute()) {
-        $_SESSION['success'] = "Food stock updated successfully!";
+        $_SESSION['success'] = "Food item updated successfully!";
     } else {
-        $_SESSION['error'] = "Failed to update food stock: " . $conn->error;
+        $_SESSION['error'] = "Failed to update food item: " . $conn->error;
     }
     $stmt->close();
     header("Location: admindash.php");
@@ -295,82 +318,94 @@ if (isset($_POST['update_booking_status'])) {
     exit;
 }
 
-// Initialize default KTV food items if table is empty
+// Check if preparation_time column exists, if not add it
+$check_prep_time = $conn->query("SHOW COLUMNS FROM food_beverages LIKE 'preparation_time'");
+if ($check_prep_time->num_rows == 0) {
+    $conn->query("ALTER TABLE food_beverages ADD COLUMN preparation_time INT DEFAULT 15 COMMENT 'Preparation time in minutes'");
+}
+
+// Check if order_time column exists in booking_food
+$check_order_time = $conn->query("SHOW COLUMNS FROM booking_food LIKE 'order_time'");
+if ($check_order_time->num_rows == 0) {
+    $conn->query("ALTER TABLE booking_food ADD COLUMN order_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+}
+
+// Initialize default KTV food items with preparation time if table is empty
 $food_count = $conn->query("SELECT COUNT(*) as count FROM food_beverages")->fetch_assoc()['count'];
 if ($food_count == 0) {
     $default_foods = [
         // Appetizers (10 items)
-        ['Chicken Popcorn', 'Appetizer', 250.00, 50],
-        ['French Fries', 'Appetizer', 180.00, 60],
-        ['Spring Rolls (Veg)', 'Appetizer', 220.00, 40],
-        ['Cheese Balls', 'Appetizer', 200.00, 45],
-        ['Garlic Bread', 'Appetizer', 160.00, 55],
-        ['Chicken Wings', 'Appetizer', 320.00, 35],
-        ['Paneer Tikka', 'Appetizer', 280.00, 40],
-        ['Potato Wedges', 'Appetizer', 190.00, 50],
-        ['Chicken Lollipop', 'Appetizer', 300.00, 30],
-        ['Crispy Corn', 'Appetizer', 210.00, 45],
+        ['Chicken Popcorn', 'Appetizer', 250.00, 50, 10],
+        ['French Fries', 'Appetizer', 180.00, 60, 8],
+        ['Spring Rolls (Veg)', 'Appetizer', 220.00, 40, 12],
+        ['Cheese Balls', 'Appetizer', 200.00, 45, 10],
+        ['Garlic Bread', 'Appetizer', 160.00, 55, 7],
+        ['Chicken Wings', 'Appetizer', 320.00, 35, 15],
+        ['Paneer Tikka', 'Appetizer', 280.00, 40, 14],
+        ['Potato Wedges', 'Appetizer', 190.00, 50, 9],
+        ['Chicken Lollipop', 'Appetizer', 300.00, 30, 13],
+        ['Crispy Corn', 'Appetizer', 210.00, 45, 8],
         
         // Main Course (10 items)
-        ['Chicken Biryani', 'Main Course', 350.00, 30],
-        ['Butter Chicken', 'Main Course', 380.00, 25],
-        ['Paneer Butter Masala', 'Main Course', 320.00, 35],
-        ['Fish & Chips', 'Main Course', 400.00, 20],
-        ['Margherita Pizza', 'Main Course', 450.00, 25],
-        ['Chicken Fried Rice', 'Main Course', 330.00, 30],
-        ['Veg Hakka Noodles', 'Main Course', 280.00, 40],
-        ['Grilled Chicken', 'Main Course', 420.00, 20],
-        ['Chicken Shawarma', 'Main Course', 280.00, 35],
-        ['Mutton Rogan Josh', 'Main Course', 450.00, 15],
+        ['Chicken Biryani', 'Main Course', 350.00, 30, 20],
+        ['Butter Chicken', 'Main Course', 380.00, 25, 18],
+        ['Paneer Butter Masala', 'Main Course', 320.00, 35, 16],
+        ['Fish & Chips', 'Main Course', 400.00, 20, 15],
+        ['Margherita Pizza', 'Main Course', 450.00, 25, 14],
+        ['Chicken Fried Rice', 'Main Course', 330.00, 30, 12],
+        ['Veg Hakka Noodles', 'Main Course', 280.00, 40, 10],
+        ['Grilled Chicken', 'Main Course', 420.00, 20, 17],
+        ['Chicken Shawarma', 'Main Course', 280.00, 35, 13],
+        ['Mutton Rogan Josh', 'Main Course', 450.00, 15, 22],
         
         // Snacks (10 items)
-        ['Chicken Burger', 'Snacks', 280.00, 40],
-        ['Veg Sandwich', 'Snacks', 200.00, 50],
-        ['French Toast', 'Snacks', 220.00, 35],
-        ['Nachos with Cheese', 'Snacks', 300.00, 30],
-        ['Samosa Plate', 'Snacks', 180.00, 45],
-        ['Chicken Wrap', 'Snacks', 260.00, 35],
-        ['Cheese Pizza Slice', 'Snacks', 180.00, 50],
-        ['Masala Fries', 'Snacks', 210.00, 40],
-        ['Paneer Tikka Sandwich', 'Snacks', 240.00, 30],
-        ['Chicken Hot Dog', 'Snacks', 220.00, 40],
+        ['Chicken Burger', 'Snacks', 280.00, 40, 12],
+        ['Veg Sandwich', 'Snacks', 200.00, 50, 8],
+        ['French Toast', 'Snacks', 220.00, 35, 9],
+        ['Nachos with Cheese', 'Snacks', 300.00, 30, 7],
+        ['Samosa Plate', 'Snacks', 180.00, 45, 8],
+        ['Chicken Wrap', 'Snacks', 260.00, 35, 10],
+        ['Cheese Pizza Slice', 'Snacks', 180.00, 50, 6],
+        ['Masala Fries', 'Snacks', 210.00, 40, 8],
+        ['Paneer Tikka Sandwich', 'Snacks', 240.00, 30, 10],
+        ['Chicken Hot Dog', 'Snacks', 220.00, 40, 7],
         
         // Beverages (Non-Alcoholic) (10 items)
-        ['Coca-Cola (500ml)', 'Beverage', 80.00, 100],
-        ['Fresh Lime Soda', 'Beverage', 100.00, 80],
-        ['Iced Tea', 'Beverage', 120.00, 70],
-        ['Virgin Mojito', 'Beverage', 150.00, 60],
-        ['Hot Coffee', 'Beverage', 90.00, 90],
-        ['Green Tea', 'Beverage', 70.00, 85],
-        ['Fresh Orange Juice', 'Beverage', 130.00, 55],
-        ['Mango Shake', 'Beverage', 160.00, 45],
-        ['Pepsi (500ml)', 'Beverage', 80.00, 95],
-        ['Mineral Water', 'Beverage', 50.00, 120],
+        ['Coca-Cola (500ml)', 'Beverage', 80.00, 100, 2],
+        ['Fresh Lime Soda', 'Beverage', 100.00, 80, 3],
+        ['Iced Tea', 'Beverage', 120.00, 70, 3],
+        ['Virgin Mojito', 'Beverage', 150.00, 60, 4],
+        ['Hot Coffee', 'Beverage', 90.00, 90, 5],
+        ['Green Tea', 'Beverage', 70.00, 85, 4],
+        ['Fresh Orange Juice', 'Beverage', 130.00, 55, 5],
+        ['Mango Shake', 'Beverage', 160.00, 45, 5],
+        ['Pepsi (500ml)', 'Beverage', 80.00, 95, 2],
+        ['Mineral Water', 'Beverage', 50.00, 120, 1],
         
         // Alcoholic Drinks (10 items)
-        ['Beer (Pint)', 'Alcoholic', 250.00, 80],
-        ['Whisky (60ml)', 'Alcoholic', 350.00, 60],
-        ['Vodka (60ml)', 'Alcoholic', 320.00, 65],
-        ['Red Wine (Glass)', 'Alcoholic', 280.00, 40],
-        ['Rum (60ml)', 'Alcoholic', 300.00, 55],
-        ['Tequila Shot', 'Alcoholic', 200.00, 70],
-        ['White Wine (Glass)', 'Alcoholic', 290.00, 35],
-        ['Gin (60ml)', 'Alcoholic', 340.00, 50],
-        ['Brandy (60ml)', 'Alcoholic', 320.00, 45],
-        ['Champagne (Glass)', 'Alcoholic', 400.00, 30],
+        ['Beer (Pint)', 'Alcoholic', 250.00, 80, 2],
+        ['Whisky (60ml)', 'Alcoholic', 350.00, 60, 2],
+        ['Vodka (60ml)', 'Alcoholic', 320.00, 65, 2],
+        ['Red Wine (Glass)', 'Alcoholic', 280.00, 40, 2],
+        ['Rum (60ml)', 'Alcoholic', 300.00, 55, 2],
+        ['Tequila Shot', 'Alcoholic', 200.00, 70, 2],
+        ['White Wine (Glass)', 'Alcoholic', 290.00, 35, 2],
+        ['Gin (60ml)', 'Alcoholic', 340.00, 50, 2],
+        ['Brandy (60ml)', 'Alcoholic', 320.00, 45, 2],
+        ['Champagne (Glass)', 'Alcoholic', 400.00, 30, 2],
         
         // Desserts (6 items)
-        ['Chocolate Brownie', 'Dessert', 180.00, 40],
-        ['Ice Cream Sundae', 'Dessert', 220.00, 35],
-        ['Cheesecake Slice', 'Dessert', 250.00, 30],
-        ['Chocolate Mousse', 'Dessert', 200.00, 45],
-        ['Fruit Salad', 'Dessert', 150.00, 50],
-        ['Gulab Jamun', 'Dessert', 120.00, 60]
+        ['Chocolate Brownie', 'Dessert', 180.00, 40, 8],
+        ['Ice Cream Sundae', 'Dessert', 220.00, 35, 5],
+        ['Cheesecake Slice', 'Dessert', 250.00, 30, 6],
+        ['Chocolate Mousse', 'Dessert', 200.00, 45, 7],
+        ['Fruit Salad', 'Dessert', 150.00, 50, 5],
+        ['Gulab Jamun', 'Dessert', 120.00, 60, 6]
     ];
     
     foreach ($default_foods as $food) {
-        $stmt = $conn->prepare("INSERT INTO food_beverages (item_name, category, price, stock) VALUES (?, ?, ?, ?)");
-        $stmt->bind_param("ssdi", $food[0], $food[1], $food[2], $food[3]);
+        $stmt = $conn->prepare("INSERT INTO food_beverages (item_name, category, price, stock, preparation_time) VALUES (?, ?, ?, ?, ?)");
+        $stmt->bind_param("ssdii", $food[0], $food[1], $food[2], $food[3], $food[4]);
         $stmt->execute();
         $stmt->close();
     }
@@ -413,7 +448,7 @@ $total_revenue = $total_revenue ? $total_revenue : 0;
 $food_orders = [];
 $bookings_with_food_count = 0; // Counter for bookings that have food items
 $orders_result = $conn->query("
-    SELECT bf.*, f.item_name, f.category, b.b_id, r.room_name, u.name as user_name,
+    SELECT bf.*, f.item_name, f.category, f.preparation_time as prep_time, b.b_id, r.room_name, u.name as user_name,
            b.booking_date, b.start_time, b.end_time, b.total_amount
     FROM booking_food bf 
     JOIN food_beverages f ON bf.f_id = f.f_id 
@@ -442,6 +477,57 @@ foreach ($food_orders as $b_id => $items) {
     } else {
         $booking_statuses[$b_id] = 'mixed'; // Mixed statuses
     }
+}
+
+// Function to format wait time (synchronized with my-bookings.php)
+function formatWaitTime($seconds) {
+    if ($seconds < 60) {
+        return $seconds . ' sec';
+    } elseif ($seconds < 3600) {
+        $minutes = floor($seconds / 60);
+        $secs = $seconds % 60;
+        return $minutes . ' min ' . $secs . ' sec';
+    } else {
+        $hours = floor($seconds / 3600);
+        $minutes = floor(($seconds % 3600) / 60);
+        return $hours . ' hr ' . $minutes . ' min';
+    }
+}
+
+// Function to get estimated remaining time
+function getEstimatedRemainingTime($order_time, $prep_time) {
+    if (!isset($order_time) || empty($order_time)) return 'calculating...';
+    
+    $elapsed = time() - strtotime($order_time);
+    $remaining = max(0, ($prep_time * 60) - $elapsed); // Convert prep_time from minutes to seconds
+    
+    if ($remaining <= 0) {
+        return 'any moment now';
+    } elseif ($remaining < 60) {
+        return $remaining . ' seconds';
+    } elseif ($remaining < 3600) {
+        $minutes = floor($remaining / 60);
+        $seconds = $remaining % 60;
+        return $minutes . ' min ' . $seconds . ' sec';
+    } else {
+        $hours = floor($remaining / 3600);
+        $minutes = floor(($remaining % 3600) / 60);
+        return $hours . ' hr ' . $minutes . ' min';
+    }
+}
+
+// Function to get progress percentage
+function getPreparationProgress($order_time, $prep_time) {
+    if (!isset($order_time) || empty($order_time) || !$prep_time) return 50;
+    
+    $elapsed = time() - strtotime($order_time);
+    $total_prep_seconds = $prep_time * 60;
+    
+    if ($elapsed >= $total_prep_seconds) {
+        return 100;
+    }
+    
+    return min(100, round(($elapsed / $total_prep_seconds) * 100));
 }
 ?>
 
@@ -473,6 +559,8 @@ foreach ($food_orders as $b_id => $items) {
     --pending: #f59e0b;        /* Amber - pending items */
     --cancelled: #64748b;      /* Slate - cancelled items (neutral) */
     --mixed: #8b5cf6;          /* Purple - mixed status */
+    --waiting: #f39c12;        /* Waiting time color */
+    --preparing: #3498db;      /* Preparation color */
     
     /* Order section specific */
     --order-bg: #1e293b;       /* Secondary background */
@@ -874,7 +962,7 @@ tbody tr:hover {
     color: white;
 }
 
-/* Food Orders Section - Updated with new color scheme */
+/* Food Orders Section - Updated with waiting time */
 .food-orders-section {
     margin-top: 40px;
     padding-top: 20px;
@@ -899,7 +987,7 @@ tbody tr:hover {
 
 .orders-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(450px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(500px, 1fr));
     gap: 25px;
     margin-top: 20px;
 }
@@ -981,18 +1069,17 @@ tbody tr:hover {
 
 .order-items {
     padding: 18px;
-    max-height: 300px;
+    max-height: 400px;
     overflow-y: auto;
 }
 
 .order-item {
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 12px;
+    flex-direction: column;
+    padding: 15px;
     background: var(--order-item);
     border-radius: 8px;
-    margin-bottom: 8px;
+    margin-bottom: 12px;
     border: 1px solid rgba(255, 255, 255, 0.05);
     transition: all 0.2s;
 }
@@ -1014,6 +1101,15 @@ tbody tr:hover {
     opacity: 0.7;
 }
 
+.order-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
 .order-item-info {
     display: flex;
     flex-direction: column;
@@ -1026,6 +1122,7 @@ tbody tr:hover {
     display: flex;
     align-items: center;
     gap: 8px;
+    font-size: 16px;
 }
 
 .order-item-details {
@@ -1035,9 +1132,9 @@ tbody tr:hover {
 
 .served-badge {
     display: inline-block;
-    padding: 2px 6px;
+    padding: 2px 8px;
     border-radius: 10px;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 600;
     margin-left: 5px;
 }
@@ -1063,14 +1160,135 @@ tbody tr:hover {
 .order-item-price {
     font-weight: 600;
     color: var(--order-accent);
-    margin: 0 15px;
-    min-width: 80px;
+    min-width: 100px;
     text-align: right;
 }
 
 .order-item-actions {
     display: flex;
     gap: 5px;
+    margin-left: 15px;
+}
+
+/* Waiting Time Styles - Synchronized with my-bookings.php */
+.waiting-time-container {
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 8px;
+    padding: 12px;
+    margin-top: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.waiting-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.waiting-time {
+    font-size: 14px;
+    font-weight: bold;
+    color: var(--waiting);
+}
+
+.estimated-time {
+    font-size: 14px;
+    font-weight: bold;
+    color: var(--success);
+}
+
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    overflow: hidden;
+    margin: 5px 0;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--waiting), var(--success));
+    border-radius: 4px;
+    transition: width 1s ease;
+}
+
+.prep-time-badge {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.5);
+    margin-top: 3px;
+}
+
+.waiting-indicator {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 5px;
+    animation: pulse 1.5s infinite;
+}
+
+.waiting-indicator.preparing {
+    background: var(--preparing);
+}
+
+.waiting-indicator.waiting {
+    background: var(--waiting);
+}
+
+@keyframes pulse {
+    0% {
+        opacity: 1;
+        transform: scale(1);
+    }
+    50% {
+        opacity: 0.5;
+        transform: scale(1.2);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* Individual item status update form */
+.item-status-update {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 10px;
+    padding-top: 8px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.item-status-update select {
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 5px 8px;
+    border-radius: 5px;
+    font-size: 11px;
+    flex: 1;
+}
+
+.item-status-update button {
+    background: var(--info);
+    color: white;
+    border: none;
+    padding: 5px 12px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.item-status-update button:hover {
+    background: #2563eb;
+    transform: translateY(-1px);
 }
 
 .order-total {
@@ -1196,6 +1414,23 @@ tbody tr:hover {
     transform: translateY(-2px);
 }
 
+.btn-delete-item {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--danger);
+    border: none;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.btn-delete-item:hover {
+    background: var(--danger);
+    color: white;
+}
+
 .no-orders {
     padding: 50px;
     text-align: center;
@@ -1214,6 +1449,46 @@ tbody tr:hover {
 .no-orders p {
     color: var(--light-dim);
     font-size: 18px;
+}
+
+/* Preparation time summary */
+.prep-summary {
+    margin-top: 30px;
+    background: linear-gradient(135deg, var(--accent), #2d3a4f);
+    padding: 20px;
+    border-radius: 10px;
+    text-align: center;
+    border: 2px solid var(--purple);
+}
+
+.prep-summary h3 {
+    color: var(--light);
+    margin-bottom: 15px;
+}
+
+.prep-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.prep-stat-box {
+    background: rgba(0, 0, 0, 0.3);
+    padding: 15px;
+    border-radius: 8px;
+    border-left: 4px solid var(--preparing);
+}
+
+.prep-stat-box h4 {
+    font-size: 28px;
+    color: var(--preparing);
+    margin-bottom: 5px;
+}
+
+.prep-stat-box p {
+    color: var(--light-dim);
+    font-size: 12px;
 }
 
 /* Modal Styles */
@@ -1661,6 +1936,16 @@ tbody tr:hover {
     .update-order-status select {
         flex: 1;
     }
+    
+    .order-item-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .order-item-actions {
+        margin-left: 0;
+        margin-top: 10px;
+    }
 }
 
 @media (max-width: 480px) {
@@ -1675,6 +1960,10 @@ tbody tr:hover {
     .btn-cancel, .btn-submit {
         width: 100%;
     }
+    
+    .prep-stats {
+        grid-template-columns: 1fr;
+    }
 }
 </style>
 </head>
@@ -1683,7 +1972,7 @@ tbody tr:hover {
 <header>
     <div class="header-left">
         <h1><i class="fas fa-crown"></i> Sirene KTV Admin Dashboard</h1>
-        <p>Complete Management System</p>
+        <p>Complete Management System with Preparation Time Tracking</p>
     </div>
     <div class="header-right">
         <div class="welcome-message">
@@ -1799,8 +2088,8 @@ tbody tr:hover {
                 </div>
                 <div class="stat-card" onclick="showSection('foods')" style="cursor:pointer;">
                     <i class="fas fa-hamburger"></i>
-                    <h3>Manage Stock</h3>
-                    <p>Update food inventory</p>
+                    <h3>Manage Stock & Prep Time</h3>
+                    <p>Update food inventory and preparation times</p>
                 </div>
                 <div class="stat-card" onclick="showSection('bookings')" style="cursor:pointer;">
                     <i class="fas fa-calendar-check"></i>
@@ -1810,7 +2099,7 @@ tbody tr:hover {
                 <div class="stat-card" onclick="showSection('food-orders')" style="cursor:pointer;">
                     <i class="fas fa-hamburger"></i>
                     <h3>View Food Orders</h3>
-                    <p>Check all room orders</p>
+                    <p>Check all room orders with waiting times</p>
                 </div>
             </div>
         </div>
@@ -1918,7 +2207,7 @@ tbody tr:hover {
             </div>
         </div>
 
-        <!-- Foods Section -->
+        <!-- Foods Section with Preparation Time -->
         <div id="foods" class="content-section">
             <div class="section-header">
                 <h2><i class="fas fa-utensils"></i> Food & Beverages Management</h2>
@@ -1936,6 +2225,7 @@ tbody tr:hover {
                             <th>Category</th>
                             <th>Price (₹)</th>
                             <th>Stock</th>
+                            <th>Prep Time (min)</th>
                             <th>Status</th>
                             <th>Actions</th>
                         </tr>
@@ -1974,6 +2264,12 @@ tbody tr:hover {
                                     </span>
                                 </td>
                                 <td>
+                                    <span style="background: rgba(52, 152, 219, 0.15); color: var(--preparing);
+                                          padding: 5px 10px; border-radius: 5px; font-size: 12px; font-weight: bold;">
+                                        <i class="far fa-clock"></i> <?= $row['preparation_time'] ?? 15 ?> min
+                                    </span>
+                                </td>
+                                <td>
                                     <span style="background: <?= $stock_status == 'In Stock' ? 'rgba(16, 185, 129, 0.15)' : ($stock_status == 'Low Stock' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)'); ?>; 
                                           color: <?= $stock_status == 'In Stock' ? 'var(--success)' : ($stock_status == 'Low Stock' ? 'var(--pending)' : 'var(--danger)'); ?>;
                                           padding: 5px 10px; border-radius: 5px; font-size: 12px;">
@@ -1981,8 +2277,8 @@ tbody tr:hover {
                                     </span>
                                 </td>
                                 <td class="action-buttons">
-                                    <button class="btn-edit" onclick="showUpdateStockModal(<?= $row['f_id'] ?>, '<?= htmlspecialchars($row['item_name']) ?>', <?= $row['stock'] ?>)">
-                                        <i class="fas fa-edit"></i> Update Stock
+                                    <button class="btn-edit" onclick="showUpdateStockModal(<?= $row['f_id'] ?>, '<?= htmlspecialchars($row['item_name']) ?>', <?= $row['stock'] ?>, <?= $row['preparation_time'] ?? 15 ?>)">
+                                        <i class="fas fa-edit"></i> Update
                                     </button>
                                 </td>
                             </tr>
@@ -2091,10 +2387,10 @@ tbody tr:hover {
             </div>
         </div>
 
-        <!-- Food Orders Section - Shows Bookings that have Food Items -->
+        <!-- Food Orders Section with Preparation Time Tracking -->
         <div id="food-orders" class="content-section">
             <div class="section-header">
-                <h2><i class="fas fa-hamburger" style="color: var(--purple);"></i> Food Orders (by Booking)</h2>
+                <h2><i class="fas fa-hamburger" style="color: var(--purple);"></i> Food Orders with Preparation Tracking</h2>
                 <span class="welcome-message">
                     <i class="fas fa-shopping-cart"></i> Total Orders: <?php echo $bookings_with_food_count; ?>
                 </span>
@@ -2107,6 +2403,48 @@ tbody tr:hover {
                     <p style="font-size: 14px; margin-top: 10px;">Orders will appear here when customers add food items to their bookings.</p>
                 </div>
             <?php else: ?>
+                <!-- Preparation Time Summary -->
+                <?php
+                $total_pending_items = 0;
+                $total_waiting_time = 0;
+                $waiting_items_count = 0;
+                
+                foreach ($food_orders as $items) {
+                    foreach ($items as $item) {
+                        if ($item['served'] == 'pending' && isset($item['order_time'])) {
+                            $total_pending_items++;
+                            $wait_time = time() - strtotime($item['order_time']);
+                            $total_waiting_time += $wait_time;
+                            $waiting_items_count++;
+                        }
+                    }
+                }
+                
+                $avg_wait_time = $waiting_items_count > 0 ? $total_waiting_time / $waiting_items_count : 0;
+                ?>
+                
+                <div class="prep-summary">
+                    <h3><i class="fas fa-chart-line"></i> Kitchen Preparation Summary</h3>
+                    <div class="prep-stats">
+                        <div class="prep-stat-box">
+                            <h4><?php echo $total_pending_items; ?></h4>
+                            <p>Items in Kitchen</p>
+                        </div>
+                        <div class="prep-stat-box">
+                            <h4><?php echo formatWaitTime($avg_wait_time); ?></h4>
+                            <p>Average Wait Time</p>
+                        </div>
+                        <div class="prep-stat-box">
+                            <h4><?php echo $served_count ?? 0; ?></h4>
+                            <p>Fully Served Orders</p>
+                        </div>
+                        <div class="prep-stat-box">
+                            <h4><?php echo $pending_count ?? 0; ?></h4>
+                            <p>Orders in Progress</p>
+                        </div>
+                    </div>
+                </div>
+                
                 <div class="orders-grid">
                     <?php 
                     $total_all_orders = 0;
@@ -2167,38 +2505,198 @@ tbody tr:hover {
                             </div>
                             
                             <div class="order-items">
-                                <?php foreach ($items as $item): ?>
+                                <?php foreach ($items as $item): 
+                                    $wait_time = isset($item['order_time']) ? (time() - strtotime($item['order_time'])) : 0;
+                                    $progress = getPreparationProgress($item['order_time'] ?? null, $item['prep_time'] ?? 15);
+                                    $remaining_time = getEstimatedRemainingTime($item['order_time'] ?? null, $item['prep_time'] ?? 15);
+                                ?>
                                     <div class="order-item <?php echo $item['served']; ?>">
-                                        <div class="order-item-info">
-                                            <span class="order-item-name">
-                                                <?php echo htmlspecialchars($item['item_name']); ?>
-                                                <span class="served-badge <?php echo $item['served']; ?>">
-                                                    <?php 
-                                                    if ($item['served'] == 'served') echo '✓ Served';
-                                                    elseif ($item['served'] == 'pending') echo '⏳ Pending';
-                                                    else echo '✗ Cancelled';
-                                                    ?>
+                                        <div class="order-item-header">
+                                            <div class="order-item-info">
+                                                <span class="order-item-name">
+                                                    <?php echo htmlspecialchars($item['item_name']); ?>
+                                                    <span class="served-badge <?php echo $item['served']; ?>">
+                                                        <?php 
+                                                        if ($item['served'] == 'served') echo '✓ Served';
+                                                        elseif ($item['served'] == 'pending') echo '⏳ Pending';
+                                                        else echo '✗ Cancelled';
+                                                        ?>
+                                                    </span>
                                                 </span>
-                                            </span>
-                                            <span class="order-item-details">
-                                                <?php echo $item['category']; ?> | Qty: <?php echo $item['quantity']; ?>
-                                            </span>
+                                                <span class="order-item-details">
+                                                    <?php echo $item['category']; ?> | Qty: <?php echo $item['quantity']; ?>
+                                                </span>
+                                            </div>
+                                            <div class="order-item-price">
+                                                ₹<?php echo number_format($item['quantity'] * $item['price'], 2); ?>
+                                            </div>
+                                            <div class="order-item-actions">
+                                                <button class="btn-delete-item" 
+                                                        onclick="showConfirm('Remove this food item from order?', 'admindash.php?delete_booking_food=<?php echo $item['bf_id']; ?>')">
+                                                    <i class="fas fa-trash"></i>
+                                                </button>
+                                            </div>
                                         </div>
-                                        <div class="order-item-price">
-                                            ₹<?php echo number_format($item['quantity'] * $item['price'], 2); ?>
-                                        </div>
-                                        <div class="order-item-actions">
-                                            <button class="btn-delete" style="padding: 4px 8px; font-size: 11px;" 
-                                                    onclick="showConfirm('Remove this food item from order?', 'admindash.php?delete_booking_food=<?php echo $item['bf_id']; ?>')">
-                                                <i class="fas fa-trash"></i>
-                                            </button>
-                                        </div>
+                                        
+                                        <!-- Waiting Time Display - Synchronized with my-bookings.php -->
+                                        <?php if ($item['served'] == 'pending' && isset($item['order_time'])): ?>
+                                            <div class="waiting-time-container" id="waiting-<?php echo $item['bf_id']; ?>">
+                                                <div class="waiting-header">
+                                                    <span>
+                                                        <span class="waiting-indicator <?php echo $progress >= 80 ? 'preparing' : 'waiting'; ?>"></span>
+                                                        Kitchen Timer
+                                                    </span>
+                                                    <span class="waiting-time" id="wait-time-<?php echo $item['bf_id']; ?>">
+                                                        <?php echo formatWaitTime($wait_time); ?>
+                                                    </span>
+                                                </div>
+                                                <div class="progress-bar">
+                                                    <div class="progress-fill" id="progress-<?php echo $item['bf_id']; ?>" style="width: <?php echo $progress; ?>%;"></div>
+                                                </div>
+                                                <div class="waiting-header">
+                                                    <span class="prep-time-badge">
+                                                        <i class="far fa-clock"></i> Prep: <?php echo $item['prep_time']; ?> min
+                                                    </span>
+                                                    <span class="estimated-time" id="remaining-<?php echo $item['bf_id']; ?>">
+                                                        <?php if ($progress >= 100): ?>
+                                                            <i class="fas fa-check-circle" style="color: var(--success);"></i> Ready soon
+                                                        <?php else: ?>
+                                                            ~<?php echo $remaining_time; ?>
+                                                        <?php endif; ?>
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            
+                                            <!-- Individual item status update form -->
+                                            <div class="item-status-update">
+                                                <form method="post" style="display: flex; gap: 8px; width: 100%;">
+                                                    <input type="hidden" name="bf_id" value="<?php echo $item['bf_id']; ?>">
+                                                    <input type="hidden" name="b_id" value="<?php echo $b_id; ?>">
+                                                    <select name="served_status">
+                                                        <option value="pending" <?php echo $item['served'] == 'pending' ? 'selected' : ''; ?>>⏳ Pending</option>
+                                                        <option value="served" <?php echo $item['served'] == 'served' ? 'selected' : ''; ?>>✓ Served</option>
+                                                        <option value="cancelled" <?php echo $item['served'] == 'cancelled' ? 'selected' : ''; ?>>✗ Cancelled</option>
+                                                    </select>
+                                                    <button type="submit" name="update_food_item_status">Update</button>
+                                                </form>
+                                            </div>
+                                            
+                                            <!-- Auto-update script for this item -->
+                                            <script>
+                                                (function() {
+                                                    const orderId = <?php echo $item['bf_id']; ?>;
+                                                    const orderTime = <?php echo isset($item['order_time']) ? strtotime($item['order_time']) : 'null'; ?>;
+                                                    const prepTime = <?php echo ($item['prep_time'] ?? 15) * 60; ?>;
+                                                    
+                                                    if (orderTime) {
+                                                        function updateWaitingTime() {
+                                                            const now = Math.floor(Date.now() / 1000);
+                                                            const elapsed = now - orderTime;
+                                                            const remaining = Math.max(0, prepTime - elapsed);
+                                                            const progress = Math.min(100, (elapsed / prepTime) * 100);
+                                                            
+                                                            // Format elapsed time
+                                                            let elapsedText = '';
+                                                            if (elapsed < 60) {
+                                                                elapsedText = elapsed + ' sec';
+                                                            } else if (elapsed < 3600) {
+                                                                const minutes = Math.floor(elapsed / 60);
+                                                                const seconds = elapsed % 60;
+                                                                elapsedText = minutes + ' min ' + seconds + ' sec';
+                                                            } else {
+                                                                const hours = Math.floor(elapsed / 3600);
+                                                                const minutes = Math.floor((elapsed % 3600) / 60);
+                                                                elapsedText = hours + ' hr ' + minutes + ' min';
+                                                            }
+                                                            
+                                                            // Format remaining time
+                                                            let remainingText = '';
+                                                            if (remaining <= 0) {
+                                                                remainingText = '<i class="fas fa-check-circle" style="color: var(--success);"></i> Ready soon';
+                                                            } else if (remaining < 60) {
+                                                                remainingText = '~' + remaining + ' sec';
+                                                            } else if (remaining < 3600) {
+                                                                const minutes = Math.floor(remaining / 60);
+                                                                const seconds = remaining % 60;
+                                                                remainingText = '~' + minutes + ' min ' + seconds + ' sec';
+                                                            } else {
+                                                                const hours = Math.floor(remaining / 3600);
+                                                                const minutes = Math.floor((remaining % 3600) / 60);
+                                                                remainingText = '~' + hours + ' hr ' + minutes + ' min';
+                                                            }
+                                                            
+                                                            // Update DOM
+                                                            const waitTimeElement = document.getElementById('wait-time-' + orderId);
+                                                            const progressElement = document.getElementById('progress-' + orderId);
+                                                            const remainingElement = document.getElementById('remaining-' + orderId);
+                                                            
+                                                            if (waitTimeElement) waitTimeElement.textContent = elapsedText;
+                                                            if (progressElement) progressElement.style.width = progress + '%';
+                                                            if (remainingElement) remainingElement.innerHTML = remainingText;
+                                                            
+                                                            // Update indicator color based on progress
+                                                            const container = document.getElementById('waiting-' + orderId);
+                                                            if (container) {
+                                                                const indicator = container.querySelector('.waiting-indicator');
+                                                                if (indicator) {
+                                                                    if (progress >= 80) {
+                                                                        indicator.className = 'waiting-indicator preparing';
+                                                                    } else {
+                                                                        indicator.className = 'waiting-indicator waiting';
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        
+                                                        // Update every second
+                                                        setInterval(updateWaitingTime, 1000);
+                                                    }
+                                                })();
+                                            </script>
+                                        <?php elseif ($item['served'] == 'pending'): ?>
+                                            <!-- Fallback for orders without order_time -->
+                                            <div class="waiting-time-container">
+                                                <div class="waiting-header">
+                                                    <span>
+                                                        <span class="waiting-indicator waiting"></span>
+                                                        Order Status
+                                                    </span>
+                                                    <span class="waiting-time">
+                                                        <i class="fas fa-clock"></i> Processing
+                                                    </span>
+                                                </div>
+                                                <div class="progress-bar">
+                                                    <div class="progress-fill" style="width: 50%;"></div>
+                                                </div>
+                                                <div class="waiting-header">
+                                                    <span class="prep-time-badge">
+                                                        <i class="far fa-clock"></i> Prep: <?php echo $item['prep_time'] ?? 15; ?> min
+                                                    </span>
+                                                    <span class="estimated-time">
+                                                        Being prepared
+                                                    </span>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="item-status-update">
+                                                <form method="post" style="display: flex; gap: 8px; width: 100%;">
+                                                    <input type="hidden" name="bf_id" value="<?php echo $item['bf_id']; ?>">
+                                                    <input type="hidden" name="b_id" value="<?php echo $b_id; ?>">
+                                                    <select name="served_status">
+                                                        <option value="pending" <?php echo $item['served'] == 'pending' ? 'selected' : ''; ?>>⏳ Pending</option>
+                                                        <option value="served" <?php echo $item['served'] == 'served' ? 'selected' : ''; ?>>✓ Served</option>
+                                                        <option value="cancelled" <?php echo $item['served'] == 'cancelled' ? 'selected' : ''; ?>>✗ Cancelled</option>
+                                                    </select>
+                                                    <button type="submit" name="update_food_item_status">Update</button>
+                                                </form>
+                                            </div>
+                                        <?php endif; ?>
                                     </div>
                                 <?php endforeach; ?>
                             </div>
                             
                             <div class="order-total">
-                                <span>Room Total:</span>
+                                <span>Food Total:</span>
                                 <span>₹<?php echo number_format($room_total, 2); ?></span>
                             </div>
                             
@@ -2218,11 +2716,11 @@ tbody tr:hover {
                                             <option value="cancelled" <?php echo $order_status == 'cancelled' ? 'selected' : ''; ?>>✗ All Cancelled</option>
                                         </select>
                                         <button type="submit" name="update_food_order_status">
-                                            Update
+                                            Update All
                                         </button>
                                     </form>
                                     <button class="btn-delete-order" onclick="showConfirm('Delete entire food order for Booking #<?php echo $b_id; ?>? This will restore stock and update booking total.', 'admindash.php?delete_whole_order=<?php echo $b_id; ?>')">
-                                        <i class="fas fa-trash"></i> Delete
+                                        <i class="fas fa-trash"></i> Delete Order
                                     </button>
                                 </div>
                             </div>
@@ -2347,11 +2845,11 @@ tbody tr:hover {
     </div>
 </div>
 
-<!-- Update Stock Modal -->
+<!-- Update Stock Modal with Preparation Time -->
 <div id="updateStockModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
-            <h3><i class="fas fa-boxes"></i> Update Stock</h3>
+            <h3><i class="fas fa-boxes"></i> Update Food Item</h3>
             <span class="close-modal" onclick="closeModal('updateStockModal')">&times;</span>
         </div>
         <form method="POST" class="modal-form">
@@ -2360,9 +2858,15 @@ tbody tr:hover {
                 <label>Item Name</label>
                 <input type="text" id="item_name_display" readonly disabled style="background: rgba(255,255,255,0.05);">
             </div>
-            <div class="form-group">
-                <label>Current Stock</label>
-                <input type="number" id="current_stock_display" readonly disabled style="background: rgba(255,255,255,0.05);">
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Current Stock</label>
+                    <input type="number" id="current_stock_display" readonly disabled style="background: rgba(255,255,255,0.05);">
+                </div>
+                <div class="form-group">
+                    <label>Preparation Time (minutes)</label>
+                    <input type="number" name="preparation_time" id="preparation_time" required min="1" max="120">
+                </div>
             </div>
             <div class="form-group">
                 <label>New Stock Quantity</label>
@@ -2371,7 +2875,7 @@ tbody tr:hover {
             <div class="modal-actions">
                 <button type="button" class="btn-cancel" onclick="closeModal('updateStockModal')">Cancel</button>
                 <button type="submit" name="update_food" class="btn-submit">
-                    <i class="fas fa-save"></i> Update Stock
+                    <i class="fas fa-save"></i> Update Item
                 </button>
             </div>
         </form>
@@ -2531,11 +3035,12 @@ function showEditRoomModal(id, name, capacity, price, status) {
     openModal('editRoomModal');
 }
 
-// Show update stock modal
-function showUpdateStockModal(id, name, currentStock) {
+// Show update stock modal with preparation time
+function showUpdateStockModal(id, name, currentStock, prepTime) {
     document.getElementById('update_food_id').value = id;
     document.getElementById('item_name_display').value = name;
     document.getElementById('current_stock_display').value = currentStock;
+    document.getElementById('preparation_time').value = prepTime;
     document.getElementById('stock').value = currentStock;
     document.getElementById('stock').focus();
     openModal('updateStockModal');

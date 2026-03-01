@@ -43,6 +43,7 @@ $food_orders_query = $conn->prepare("
         fb.item_name as food_name,
         fb.category,
         fb.price as original_price,
+        fb.preparation_time as prep_time,
         b.b_id as booking_id,
         b.booking_date,
         b.start_time,
@@ -81,9 +82,25 @@ foreach ($food_orders as $order) {
             'items' => [],
             'total' => 0,
             'has_unserved_items' => false,
-            'all_served' => true
+            'all_served' => true,
+            'earliest_order_time' => null,
+            'latest_order_time' => null
         ];
     }
+    
+    // Calculate waiting time for pending orders
+    if ($order['served'] == 'pending' && $order['order_time']) {
+        $order_time = strtotime($order['order_time']);
+        if (!$food_orders_by_booking[$booking_id]['earliest_order_time'] || 
+            $order_time < $food_orders_by_booking[$booking_id]['earliest_order_time']) {
+            $food_orders_by_booking[$booking_id]['earliest_order_time'] = $order_time;
+        }
+        if (!$food_orders_by_booking[$booking_id]['latest_order_time'] || 
+            $order_time > $food_orders_by_booking[$booking_id]['latest_order_time']) {
+            $food_orders_by_booking[$booking_id]['latest_order_time'] = $order_time;
+        }
+    }
+    
     $food_orders_by_booking[$booking_id]['items'][] = $order;
     $food_orders_by_booking[$booking_id]['total'] += ($order['price'] * $order['quantity']);
     
@@ -125,6 +142,8 @@ $total_food_spent = 0;
 $unserved_food_orders = 0;
 $served_food_orders = 0;
 $cancelled_food_orders = 0;
+$average_wait_time = 0;
+$waiting_times = [];
 
 foreach ($food_orders as $order) {
     $total_food_spent += ($order['price'] * $order['quantity']);
@@ -132,6 +151,11 @@ foreach ($food_orders as $order) {
     switch(strtolower($order['served'])) {
         case 'pending':
             $unserved_food_orders++;
+            // Calculate waiting time for pending orders
+            if ($order['order_time']) {
+                $wait_time = time() - strtotime($order['order_time']);
+                $waiting_times[] = $wait_time;
+            }
             break;
         case 'served':
             $served_food_orders++;
@@ -140,6 +164,62 @@ foreach ($food_orders as $order) {
             $cancelled_food_orders++;
             break;
     }
+}
+
+// Calculate average wait time
+if (!empty($waiting_times)) {
+    $average_wait_time = array_sum($waiting_times) / count($waiting_times);
+}
+
+// Function to format wait time
+function formatWaitTime($seconds) {
+    if ($seconds < 60) {
+        return $seconds . ' sec';
+    } elseif ($seconds < 3600) {
+        $minutes = floor($seconds / 60);
+        $secs = $seconds % 60;
+        return $minutes . ' min ' . $secs . ' sec';
+    } else {
+        $hours = floor($seconds / 3600);
+        $minutes = floor(($seconds % 3600) / 60);
+        return $hours . ' hr ' . $minutes . ' min';
+    }
+}
+
+// Function to get estimated remaining time
+function getEstimatedRemainingTime($order_time, $prep_time) {
+    if (!$order_time) return null;
+    
+    $elapsed = time() - strtotime($order_time);
+    $remaining = max(0, ($prep_time * 60) - $elapsed); // Convert prep_time from minutes to seconds
+    
+    if ($remaining <= 0) {
+        return 'any moment now';
+    } elseif ($remaining < 60) {
+        return $remaining . ' seconds';
+    } elseif ($remaining < 3600) {
+        $minutes = floor($remaining / 60);
+        $seconds = $remaining % 60;
+        return $minutes . ' min ' . $seconds . ' sec';
+    } else {
+        $hours = floor($remaining / 3600);
+        $minutes = floor(($remaining % 3600) / 60);
+        return $hours . ' hr ' . $minutes . ' min';
+    }
+}
+
+// Function to get progress percentage
+function getPreparationProgress($order_time, $prep_time) {
+    if (!$order_time || !$prep_time) return 0;
+    
+    $elapsed = time() - strtotime($order_time);
+    $total_prep_seconds = $prep_time * 60;
+    
+    if ($elapsed >= $total_prep_seconds) {
+        return 100;
+    }
+    
+    return min(100, round(($elapsed / $total_prep_seconds) * 100));
 }
 ?>
 <!DOCTYPE html>
@@ -166,6 +246,8 @@ foreach ($food_orders as $order) {
             --teal: #008080;
             --food-payment: #e67e22;
             --unserved: #e67e22;
+            --waiting: #f39c12;
+            --preparing: #3498db;
         }
 
         * {
@@ -531,6 +613,18 @@ foreach ($food_orders as $order) {
             border: 1px solid rgba(230, 126, 34, 0.3);
         }
 
+        .status-preparing {
+            background: rgba(52, 152, 219, 0.2);
+            color: var(--preparing);
+            border: 1px solid rgba(52, 152, 219, 0.3);
+        }
+
+        .status-waiting {
+            background: rgba(243, 156, 18, 0.2);
+            color: var(--waiting);
+            border: 1px solid rgba(243, 156, 18, 0.3);
+        }
+
         .booking-details {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -704,8 +798,10 @@ foreach ($food_orders as $order) {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 10px;
+            padding: 15px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            flex-wrap: wrap;
+            gap: 15px;
         }
 
         .food-item:last-child {
@@ -714,12 +810,14 @@ foreach ($food_orders as $order) {
 
         .food-item-details {
             flex: 2;
+            min-width: 200px;
         }
 
         .food-item-name {
             font-weight: bold;
             color: var(--light);
             margin-bottom: 3px;
+            font-size: 16px;
         }
 
         .food-item-category {
@@ -731,6 +829,7 @@ foreach ($food_orders as $order) {
             flex: 1;
             text-align: center;
             color: var(--light);
+            min-width: 80px;
         }
 
         .food-item-price {
@@ -738,11 +837,97 @@ foreach ($food_orders as $order) {
             text-align: right;
             color: var(--highlight);
             font-weight: bold;
+            min-width: 100px;
         }
 
         .food-item-status {
             flex: 1;
             text-align: center;
+            min-width: 120px;
+        }
+
+        /* New Waiting Time Styles */
+        .waiting-time-container {
+            flex: 2;
+            min-width: 250px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 10px;
+        }
+
+        .waiting-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .waiting-time {
+            font-size: 14px;
+            font-weight: bold;
+            color: var(--waiting);
+        }
+
+        .estimated-time {
+            font-size: 14px;
+            font-weight: bold;
+            color: var(--success);
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 5px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--waiting), var(--success));
+            border-radius: 4px;
+            transition: width 1s ease;
+        }
+
+        .prep-time-badge {
+            font-size: 10px;
+            color: rgba(255, 255, 255, 0.5);
+            margin-top: 3px;
+        }
+
+        .waiting-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 5px;
+            animation: pulse 1.5s infinite;
+        }
+
+        .waiting-indicator.preparing {
+            background: var(--preparing);
+        }
+
+        .waiting-indicator.waiting {
+            background: var(--waiting);
+        }
+
+        @keyframes pulse {
+            0% {
+                opacity: 1;
+                transform: scale(1);
+            }
+            50% {
+                opacity: 0.5;
+                transform: scale(1.2);
+            }
+            100% {
+                opacity: 1;
+                transform: scale(1);
+            }
         }
 
         .order-summary {
@@ -1113,16 +1298,21 @@ foreach ($food_orders as $order) {
             
             .food-item {
                 flex-direction: column;
-                gap: 10px;
                 text-align: center;
             }
             
             .food-item-details,
             .food-item-quantity,
             .food-item-price,
-            .food-item-status {
+            .food-item-status,
+            .waiting-time-container {
                 width: 100%;
                 text-align: center;
+                min-width: 100%;
+            }
+            
+            .waiting-header {
+                justify-content: center;
             }
             
             .order-summary {
@@ -1435,19 +1625,19 @@ foreach ($food_orders as $order) {
                     <div class="stat-card">
                         <div class="stat-icon"><i class="fas fa-clock"></i></div>
                         <div class="stat-number"><?php echo $unserved_food_orders; ?></div>
-                        <div class="stat-label">Not Served</div>
+                        <div class="stat-label">In Kitchen</div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon"><i class="fas fa-hourglass-half"></i></div>
+                        <div class="stat-number"><?php echo formatWaitTime($average_wait_time); ?></div>
+                        <div class="stat-label">Avg Wait Time</div>
                     </div>
                     
                     <div class="stat-card">
                         <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
                         <div class="stat-number"><?php echo $served_food_orders; ?></div>
                         <div class="stat-label">Served</div>
-                    </div>
-                    
-                    <div class="stat-card">
-                        <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
-                        <div class="stat-number">₱<?php echo number_format($total_food_spent, 2); ?></div>
-                        <div class="stat-label">Total Spent</div>
                     </div>
                 </div>
                 
@@ -1483,11 +1673,26 @@ foreach ($food_orders as $order) {
                                     <i class="far fa-calendar"></i>
                                     <?php echo date('F j, Y', strtotime($booking_data['booking_date'])); ?>
                                 </div>
+                                <?php if ($booking_data['has_unserved_items']): ?>
+                                    <div style="margin-top: 10px; display: flex; gap: 10px; align-items: center;">
+                                        <span class="waiting-indicator preparing"></span>
+                                        <span style="color: var(--preparing); font-size: 13px;">Kitchen is preparing your food</span>
+                                    </div>
+                                <?php endif; ?>
                             </div>
+                            <?php if ($booking_data['has_unserved_items']): ?>
+                                <div class="booking-status status-preparing">
+                                    <i class="fas fa-utensils"></i> Preparing
+                                </div>
+                            <?php endif; ?>
                         </div>
                         
                         <div class="food-items-list">
-                            <?php foreach ($booking_data['items'] as $order): ?>
+                            <?php foreach ($booking_data['items'] as $order): 
+                                $wait_time = $order['order_time'] ? (time() - strtotime($order['order_time'])) : 0;
+                                $progress = getPreparationProgress($order['order_time'], $order['prep_time']);
+                                $remaining_time = getEstimatedRemainingTime($order['order_time'], $order['prep_time']);
+                            ?>
                                 <div class="food-item">
                                     <div class="food-item-details">
                                         <div class="food-item-name"><?php echo htmlspecialchars($order['food_name']); ?></div>
@@ -1501,21 +1706,114 @@ foreach ($food_orders as $order) {
                                         <small style="display: block; font-size: 10px; color: rgba(255,255,255,0.5);">@ ₱<?php echo number_format($order['price'], 2); ?> each</small>
                                     </div>
                                     <div class="food-item-status">
-                                        <span class="booking-status <?php 
-                                            echo $order['served'] == 'served' ? 'status-served' : 
-                                                ($order['served'] == 'cancelled' ? 'status-cancelled' : 'status-unserved'); 
-                                        ?>">
-                                            <?php 
-                                                if ($order['served'] == 'served') {
-                                                    echo 'SERVED';
-                                                } elseif ($order['served'] == 'cancelled') {
-                                                    echo 'CANCELLED';
-                                                } else {
-                                                    echo 'NOT SERVED';
-                                                }
-                                            ?>
-                                        </span>
+                                        <?php if ($order['served'] == 'served'): ?>
+                                            <span class="booking-status status-served">
+                                                <i class="fas fa-check-circle"></i> SERVED
+                                            </span>
+                                        <?php elseif ($order['served'] == 'cancelled'): ?>
+                                            <span class="booking-status status-cancelled">
+                                                <i class="fas fa-times-circle"></i> CANCELLED
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="booking-status status-preparing">
+                                                <i class="fas fa-spinner fa-spin"></i> PREPARING
+                                            </span>
+                                        <?php endif; ?>
                                     </div>
+                                    
+                                    <!-- Waiting Time Display for Pending Orders -->
+                                    <?php if ($order['served'] == 'pending' && $order['order_time']): ?>
+                                        <div class="waiting-time-container" id="waiting-<?php echo $order['bf_id']; ?>">
+                                            <div class="waiting-header">
+                                                <span>
+                                                    <span class="waiting-indicator <?php echo $progress >= 80 ? 'preparing' : 'waiting'; ?>"></span>
+                                                    Wait Time
+                                                </span>
+                                                <span class="waiting-time" id="wait-time-<?php echo $order['bf_id']; ?>">
+                                                    <?php echo formatWaitTime($wait_time); ?>
+                                                </span>
+                                            </div>
+                                            <div class="progress-bar">
+                                                <div class="progress-fill" id="progress-<?php echo $order['bf_id']; ?>" style="width: <?php echo $progress; ?>%;"></div>
+                                            </div>
+                                            <div class="waiting-header">
+                                                <span class="prep-time-badge">
+                                                    <i class="far fa-clock"></i> Est. prep: <?php echo $order['prep_time']; ?> min
+                                                </span>
+                                                <span class="estimated-time" id="remaining-<?php echo $order['bf_id']; ?>">
+                                                    <?php if ($progress >= 100): ?>
+                                                        <i class="fas fa-check-circle" style="color: var(--success);"></i> Ready soon
+                                                    <?php else: ?>
+                                                        ~<?php echo $remaining_time; ?>
+                                                    <?php endif; ?>
+                                                </span>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Auto-update script for this item -->
+                                        <script>
+                                            (function() {
+                                                const orderId = <?php echo $order['bf_id']; ?>;
+                                                const orderTime = <?php echo strtotime($order['order_time']); ?>;
+                                                const prepTime = <?php echo $order['prep_time'] * 60; ?>; // Convert to seconds
+                                                
+                                                function updateWaitingTime() {
+                                                    const now = Math.floor(Date.now() / 1000);
+                                                    const elapsed = now - orderTime;
+                                                    const remaining = Math.max(0, prepTime - elapsed);
+                                                    const progress = Math.min(100, (elapsed / prepTime) * 100);
+                                                    
+                                                    // Format elapsed time
+                                                    let elapsedText = '';
+                                                    if (elapsed < 60) {
+                                                        elapsedText = elapsed + ' sec';
+                                                    } else if (elapsed < 3600) {
+                                                        const minutes = Math.floor(elapsed / 60);
+                                                        const seconds = elapsed % 60;
+                                                        elapsedText = minutes + ' min ' + seconds + ' sec';
+                                                    } else {
+                                                        const hours = Math.floor(elapsed / 3600);
+                                                        const minutes = Math.floor((elapsed % 3600) / 60);
+                                                        elapsedText = hours + ' hr ' + minutes + ' min';
+                                                    }
+                                                    
+                                                    // Format remaining time
+                                                    let remainingText = '';
+                                                    if (remaining <= 0) {
+                                                        remainingText = '<i class="fas fa-check-circle" style="color: var(--success);"></i> Ready soon';
+                                                    } else if (remaining < 60) {
+                                                        remainingText = '~' + remaining + ' sec';
+                                                    } else if (remaining < 3600) {
+                                                        const minutes = Math.floor(remaining / 60);
+                                                        const seconds = remaining % 60;
+                                                        remainingText = '~' + minutes + ' min ' + seconds + ' sec';
+                                                    } else {
+                                                        const hours = Math.floor(remaining / 3600);
+                                                        const minutes = Math.floor((remaining % 3600) / 60);
+                                                        remainingText = '~' + hours + ' hr ' + minutes + ' min';
+                                                    }
+                                                    
+                                                    // Update DOM
+                                                    document.getElementById('wait-time-' + orderId).textContent = elapsedText;
+                                                    document.getElementById('progress-' + orderId).style.width = progress + '%';
+                                                    document.getElementById('remaining-' + orderId).innerHTML = remainingText;
+                                                    
+                                                    // Update indicator color based on progress
+                                                    const indicator = document.querySelector('#waiting-' + orderId + ' .waiting-indicator');
+                                                    if (indicator) {
+                                                        if (progress >= 80) {
+                                                            indicator.className = 'waiting-indicator preparing';
+                                                        } else {
+                                                            indicator.className = 'waiting-indicator waiting';
+                                                        }
+                                                    }
+                                                }
+                                                
+                                                // Update every second
+                                                setInterval(updateWaitingTime, 1000);
+                                            })();
+                                        </script>
+                                    <?php endif; ?>
                                 </div>
                             <?php endforeach; ?>
                         </div>
@@ -1532,14 +1830,14 @@ foreach ($food_orders as $order) {
                             
                             <?php if ($booking_data['booking_status'] != 'cancelled' && $booking_data['booking_status'] != 'completed'): ?>
                                 <?php if ($booking_data['has_unserved_items']): ?>
-                                    <!-- Pay for Food Button - Uses your existing payment.php with food items -->
+                                    <!-- Pay for Food Button -->
                                     <a href="payment.php?id=<?php echo $booking_id; ?>&type=food_only" class="action-btn action-food">
                                         <i class="fas fa-credit-card"></i> Pay for Food (₱<?php echo number_format($booking_data['total'], 2); ?>)
                                     </a>
                                 <?php endif; ?>
                                 
                                 <?php if (!$booking_data['all_served']): ?>
-                                    <a href="order-food.php?booking_id=<?php echo $booking_id; ?>" class="action-btn action-primary">
+                                    <a href="food-order.php?booking_id=<?php echo $booking_id; ?>" class="action-btn action-primary">
                                         <i class="fas fa-plus-circle"></i> Add More Items
                                     </a>
                                 <?php endif; ?>
