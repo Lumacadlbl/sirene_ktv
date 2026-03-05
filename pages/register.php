@@ -260,7 +260,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             background: rgba(255, 255, 255, 0.08);
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 10px;
-            color: var(--light); /* White text when closed */
+            color: var(--light);
             font-size: 14px;
             height: 100%;
             cursor: pointer;
@@ -271,46 +271,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         /* Style for the dropdown options when opened */
         .country-code-select select option {
-            background-color: #ffffff; /* White background */
-            color: #000000; /* Black text */
+            background-color: #ffffff;
+            color: #000000;
             padding: 12px 15px;
             font-size: 14px;
-        }
-
-        /* Style for the selected option in dropdown */
-        .country-code-select select option:checked {
-            background-color: #f0f0f0; /* Light gray background */
-            color: #000000; /* Black text */
-        }
-
-        /* For the dropdown when it's open */
-        .country-code-select select:focus option:checked {
-            background-color: var(--highlight);
-            color: #ffffff;
-        }
-
-        /* For Firefox - ensure black text in dropdown */
-        @-moz-document url-prefix() {
-            .country-code-select select {
-                color: var(--light);
-                text-shadow: 0 0 0 var(--light);
-            }
-            
-            .country-code-select select option {
-                background-color: #ffffff !important;
-                color: #000000 !important;
-            }
-        }
-
-        /* For WebKit browsers (Chrome, Safari, Edge) */
-        .country-code-select select option {
-            background-color: #ffffff !important;
-            color: #000000 !important;
-        }
-
-        /* When dropdown is open, change the closed state text to white */
-        .country-code-select select {
-            color: var(--light) !important;
         }
 
         .country-flag {
@@ -324,6 +288,31 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         .phone-input {
             flex: 1;
+            position: relative;
+        }
+
+        .country-code-prefix {
+            position: absolute;
+            left: 45px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--highlight);
+            font-weight: 600;
+            z-index: 2;
+            pointer-events: none;
+            display: none;
+        }
+
+        .phone-input input {
+            padding-left: 45px;
+        }
+
+        .phone-input.show-prefix input {
+            padding-left: 95px;
+        }
+
+        .phone-input.show-prefix .country-code-prefix {
+            display: block;
         }
 
         .password-strength {
@@ -512,6 +501,25 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             color: rgba(255, 255, 255, 0.6);
         }
 
+        /* Info Note */
+        .info-note {
+            background: rgba(233, 69, 96, 0.1);
+            border: 1px solid rgba(233, 69, 96, 0.3);
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin-bottom: 15px;
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.8);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .info-note i {
+            color: var(--highlight);
+            font-size: 14px;
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .register-container {
@@ -605,6 +613,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         <div class="form-group">
             <label for="contact"><i class="fas fa-phone"></i> Contact Number</label>
+            
             <div class="contact-group">
                 <div class="country-code-select">
                     <div class="input-with-icon">
@@ -632,9 +641,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                         <i class="fas fa-chevron-down select-arrow"></i>
                     </div>
                 </div>
-                <div class="phone-input">
+                <div class="phone-input" id="phoneInputContainer">
                     <div class="input-with-icon">
                         <i class="fas fa-phone input-icon"></i>
+                        <span class="country-code-prefix" id="countryCodePrefix"></span>
                         <input type="text" id="contact" name="contact" placeholder="Phone number" required 
                                pattern="[0-9]{7,15}" title="Enter 7-15 digits without country code">
                     </div>
@@ -735,20 +745,62 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             bgAnimation.appendChild(note);
         }
 
-        // Update flag display when country changes
+        // Auto-add country code to phone number
         const countrySelect = document.getElementById('country_code');
+        const phoneInput = document.getElementById('contact');
+        const phoneContainer = document.getElementById('phoneInputContainer');
+        const countryCodePrefix = document.getElementById('countryCodePrefix');
         
+        // Store the last valid phone number without country code
+        let lastPhoneNumber = '';
+
         countrySelect.addEventListener('change', function() {
             const selectedOption = this.options[this.selectedIndex];
-            const flag = selectedOption.getAttribute('data-flag');
-            
-            // Update phone placeholder based on country
             const countryCode = this.value;
-            updatePhonePlaceholder(countryCode);
+            
+            if (countryCode) {
+                // Show the country code prefix
+                phoneContainer.classList.add('show-prefix');
+                countryCodePrefix.textContent = countryCode;
+                
+                // Update placeholder based on country
+                updatePhonePlaceholder(countryCode);
+                
+                // If there was a previously entered number, preserve it
+                if (lastPhoneNumber) {
+                    phoneInput.value = lastPhoneNumber;
+                }
+                
+                // Update validation
+                updatePhoneValidation(countryCode);
+            } else {
+                // Hide prefix if no country selected
+                phoneContainer.classList.remove('show-prefix');
+                phoneInput.placeholder = 'Phone number';
+                phoneInput.value = ''; // Clear if no country selected
+                lastPhoneNumber = '';
+            }
+        });
+
+        // Handle phone input - store the number without the country code
+        phoneInput.addEventListener('input', function(e) {
+            // Remove any non-digit characters
+            let rawValue = this.value.replace(/[^0-9]/g, '');
+            
+            // Store the raw number (without country code)
+            lastPhoneNumber = rawValue;
+            
+            // Update the input with only digits
+            this.value = rawValue;
+            
+            // Update validation based on current country
+            const countryCode = countrySelect.value;
+            if (countryCode) {
+                updatePhoneValidation(countryCode);
+            }
         });
 
         function updatePhonePlaceholder(countryCode) {
-            const phoneInput = document.getElementById('contact');
             const examples = {
                 '+1': '5551234567',
                 '+44': '7911123456',
@@ -770,6 +822,68 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             };
             
             phoneInput.placeholder = examples[countryCode] || 'Phone number';
+        }
+
+        function updatePhoneValidation(countryCode) {
+            const minLength = getMinPhoneLength(countryCode);
+            const maxLength = getMaxPhoneLength(countryCode);
+            const currentLength = phoneInput.value.length;
+            
+            if (currentLength === 0) {
+                phoneInput.setCustomValidity('');
+            } else if (currentLength < minLength) {
+                phoneInput.setCustomValidity(`Phone number should be at least ${minLength} digits`);
+            } else if (currentLength > maxLength) {
+                phoneInput.setCustomValidity(`Phone number should not exceed ${maxLength} digits`);
+            } else {
+                phoneInput.setCustomValidity('');
+            }
+        }
+
+        function getMinPhoneLength(countryCode) {
+            const minLengths = {
+                '+1': 10,
+                '+44': 10,
+                '+61': 9,
+                '+65': 8,
+                '+60': 9,
+                '+63': 10,
+                '+81': 10,
+                '+82': 10,
+                '+86': 11,
+                '+91': 10,
+                '+971': 9,
+                '+33': 9,
+                '+49': 10,
+                '+34': 9,
+                '+39': 10,
+                '+55': 11,
+                '+52': 10
+            };
+            return minLengths[countryCode] || 7;
+        }
+
+        function getMaxPhoneLength(countryCode) {
+            const maxLengths = {
+                '+1': 10,
+                '+44': 10,
+                '+61': 9,
+                '+65': 8,
+                '+60': 9,
+                '+63': 10,
+                '+81': 10,
+                '+82': 10,
+                '+86': 11,
+                '+91': 10,
+                '+971': 9,
+                '+33': 9,
+                '+49': 10,
+                '+34': 9,
+                '+39': 10,
+                '+55': 11,
+                '+52': 10
+            };
+            return maxLengths[countryCode] || 15;
         }
 
         // Check password strength
@@ -835,9 +949,30 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             }
             
             // Check phone number
-            if (!/^[0-9]{7,15}$/.test(phone)) {
+            if (!phone) {
                 e.preventDefault();
-                alert('Please enter a valid phone number (7-15 digits)');
+                alert('Please enter your phone number');
+                return;
+            }
+            
+            if (!/^[0-9]+$/.test(phone)) {
+                e.preventDefault();
+                alert('Phone number should contain only digits');
+                return;
+            }
+            
+            const minLength = getMinPhoneLength(countryCode);
+            const maxLength = getMaxPhoneLength(countryCode);
+            
+            if (phone.length < minLength) {
+                e.preventDefault();
+                alert(`Phone number should be at least ${minLength} digits for the selected country`);
+                return;
+            }
+            
+            if (phone.length > maxLength) {
+                e.preventDefault();
+                alert(`Phone number should not exceed ${maxLength} digits for the selected country`);
                 return;
             }
             
@@ -871,71 +1006,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 this.setCustomValidity('');
             }
         });
-
-        // Contact number formatting - allow only digits
-        const contactInput = document.getElementById('contact');
-        contactInput.addEventListener('input', function() {
-            this.value = this.value.replace(/[^0-9]/g, '');
-            
-            // Validate length based on country
-            const countryCode = document.getElementById('country_code').value;
-            const minLength = getMinPhoneLength(countryCode);
-            const maxLength = getMaxPhoneLength(countryCode);
-            
-            if (this.value.length < minLength) {
-                this.setCustomValidity(`Phone number should be at least ${minLength} digits for this country`);
-            } else if (this.value.length > maxLength) {
-                this.setCustomValidity(`Phone number should not exceed ${maxLength} digits`);
-            } else {
-                this.setCustomValidity('');
-            }
-        });
-
-        function getMinPhoneLength(countryCode) {
-            const minLengths = {
-                '+1': 10, // USA/Canada
-                '+44': 10, // UK
-                '+61': 9, // Australia
-                '+65': 8, // Singapore
-                '+60': 9, // Malaysia
-                '+63': 10, // Philippines
-                '+81': 10, // Japan
-                '+82': 10, // South Korea
-                '+86': 11, // China
-                '+91': 10, // India
-                '+971': 9, // UAE
-                '+33': 9, // France
-                '+49': 10, // Germany
-                '+34': 9, // Spain
-                '+39': 10, // Italy
-                '+55': 11, // Brazil
-                '+52': 10 // Mexico
-            };
-            return minLengths[countryCode] || 7;
-        }
-
-        function getMaxPhoneLength(countryCode) {
-            const maxLengths = {
-                '+1': 10,
-                '+44': 10,
-                '+61': 9,
-                '+65': 8,
-                '+60': 9,
-                '+63': 10,
-                '+81': 10,
-                '+82': 10,
-                '+86': 11,
-                '+91': 10,
-                '+971': 9,
-                '+33': 9,
-                '+49': 10,
-                '+34': 9,
-                '+39': 10,
-                '+55': 11,
-                '+52': 10
-            };
-            return maxLengths[countryCode] || 15;
-        }
     });
 </script>
 

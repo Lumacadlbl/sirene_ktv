@@ -56,6 +56,13 @@ if ($check_food_payment->num_rows == 0) {
     $conn->query("ALTER TABLE booking_food ADD COLUMN payment_id VARCHAR(100) NULL AFTER served");
 }
 
+// Check if f_id column exists in payments table and add it if not
+$check_payments_f_id = $conn->query("SHOW COLUMNS FROM payments LIKE 'f_id'");
+if ($check_payments_f_id->num_rows == 0) {
+    $conn->query("ALTER TABLE payments ADD COLUMN f_id INT NULL AFTER b_id, ADD FOREIGN KEY (f_id) REFERENCES food_beverages(f_id) ON DELETE SET NULL");
+    error_log("Added f_id column to payments table");
+}
+
 // Fetch booking details
 $booking_query = $conn->prepare("
     SELECT b.*, r.room_name, r.price_hr, r.capcity 
@@ -89,7 +96,8 @@ $food_query = $conn->prepare("
     SELECT 
         bf.*,
         fb.item_name,
-        fb.category
+        fb.category,
+        fb.f_id
     FROM booking_food bf
     JOIN food_beverages fb ON bf.f_id = fb.f_id
     WHERE bf.b_id = ? 
@@ -114,8 +122,10 @@ $hours = $interval->h + ($interval->i / 60);
 // Calculate totals based on payment type
 $room_total = $booking['total_amount'];
 $unpaid_food_total = 0;
+$unpaid_food_ids = []; // Store f_ids for unpaid items
 foreach ($unpaid_food_items as $item) {
     $unpaid_food_total += ($item['price'] * $item['quantity']);
+    $unpaid_food_ids[] = $item['f_id']; // Collect f_ids for reference
 }
 
 // Also fetch previously paid food items for display
@@ -221,14 +231,19 @@ function createPayMongoCheckout($amount, $description, $booking_id, $user_id, $p
     if (!empty($unpaid_food_items)) {
         $food_list = [];
         $food_ids = [];
+        $f_ids = []; // Store food_beverages f_ids
         foreach ($unpaid_food_items as $index => $item) {
             $food_list[] = $item['item_name'] . ' (x' . $item['quantity'] . ')';
             if ($item['bf_id']) {
                 $food_ids[] = $item['bf_id'];
             }
+            if ($item['f_id']) {
+                $f_ids[] = $item['f_id']; // Collect f_ids from food_beverages table
+            }
         }
         $metadata['food_items'] = implode(', ', $food_list);
         $metadata['food_item_ids'] = implode(',', $food_ids);
+        $metadata['food_f_ids'] = implode(',', array_unique($f_ids)); // Add unique f_ids
     }
     
     $data = [
@@ -321,13 +336,27 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) 
                 $update_booking->bind_param("si", $store_payment_id, $booking_id);
                 $update_booking->execute();
                 
-                // Insert into payments table
+                // For food-only store payment, we need to create multiple payment records?
+                // Since each food item could have different f_id, but it's easier to create one payment record
+                // with the first food item's f_id or NULL if multiple items
+                $f_id_to_use = !empty($unpaid_food_items) ? $unpaid_food_items[0]['f_id'] : null;
+                
+                // Insert into payments table (single payment record for all food items)
                 $payment_insert = $conn->prepare("
-                    INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
-                    VALUES (?, ?, 'store', 'pending', ?, NOW())
+                    INSERT INTO payments (b_id, f_id, u_id, payment_method, payment_status, amount, payment_date) 
+                    VALUES (?, ?, ?, 'store', 'pending', ?, NOW())
                 ");
-                $payment_insert->bind_param("iid", $booking_id, $user_id, $unpaid_food_total);
+                $payment_insert->bind_param("iisd", $booking_id, $f_id_to_use, $user_id, $unpaid_food_total);
                 $payment_insert->execute();
+                $payment_id = $conn->insert_id;
+                
+                // If there are multiple food items, we could update the payment_id in booking_food
+                // to link back to this payment record
+                if ($payment_id) {
+                    $link_foods = $conn->prepare("UPDATE booking_food SET payment_id = ? WHERE b_id = ? AND (payment_id IS NULL OR payment_id = '')");
+                    $link_foods->bind_param("si", $payment_id, $booking_id);
+                    $link_foods->execute();
+                }
                 
                 $conn->commit();
                 
@@ -341,10 +370,10 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) 
                 $update->bind_param("di", $downpayment, $booking_id);
                 $update->execute();
                 
-                // Insert into payments table
+                // For full payment, f_id is NULL since this is for the room booking
                 $payment_insert = $conn->prepare("
-                    INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
-                    VALUES (?, ?, 'store', 'pending', ?, NOW())
+                    INSERT INTO payments (b_id, f_id, u_id, payment_method, payment_status, amount, payment_date) 
+                    VALUES (?, NULL, ?, 'store', 'pending', ?, NOW())
                 ");
                 $payment_insert->bind_param("iid", $booking_id, $user_id, $downpayment);
                 $payment_insert->execute();
@@ -418,20 +447,33 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) 
                         $update_status->bind_param("i", $booking_id);
                         $update_status->execute();
                     }
+                    
+                    // For food-only payment, we need to determine which f_id to use
+                    // Since this could be multiple food items, we'll use the first one's f_id or NULL
+                    $f_id_to_use = !empty($unpaid_food_items) ? $unpaid_food_items[0]['f_id'] : null;
+                    
+                    // Insert into payments table
+                    $payment_insert = $conn->prepare("
+                        INSERT INTO payments (b_id, f_id, u_id, payment_method, payment_status, amount, payment_date) 
+                        VALUES (?, ?, ?, 'pending', ?, NOW())
+                    ");
+                    $payment_insert->bind_param("iisd", $booking_id, $f_id_to_use, $user_id, $payment_method, $amount_to_pay);
+                    $payment_insert->execute();
+                    
                 } else {
                     // For full payment, store session_id in booking table
                     $update = $conn->prepare("UPDATE booking SET paymongo_payment_id = ?, payment_status = 'pending_payment' WHERE b_id = ?");
                     $update->bind_param("si", $session_id, $booking_id);
                     $update->execute();
+                    
+                    // For full payment, f_id is NULL since this includes room booking
+                    $payment_insert = $conn->prepare("
+                        INSERT INTO payments (b_id, f_id, u_id, payment_method, payment_status, amount, payment_date) 
+                        VALUES (?, NULL, ?, ?, 'pending', ?, NOW())
+                    ");
+                    $payment_insert->bind_param("iisd", $booking_id, $user_id, $payment_method, $amount_to_pay);
+                    $payment_insert->execute();
                 }
-                
-                // Insert into payments table
-                $payment_insert = $conn->prepare("
-                    INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
-                    VALUES (?, ?, ?, 'pending', ?, NOW())
-                ");
-                $payment_insert->bind_param("iisd", $booking_id, $user_id, $payment_method, $amount_to_pay);
-                $payment_insert->execute();
                 
                 $conn->commit();
                 
