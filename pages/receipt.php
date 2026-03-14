@@ -70,15 +70,15 @@ try {
 // Calculate room cost
 $room_cost = $total_hours * ($booking['price_hr'] ?? 0);
 
-// Fetch food items for this booking from booking_food table
+// Fetch food items for this booking from preorders table
 $food_items = [];
 $food_cost = 0;
 
 $food_query = $conn->prepare("
-    SELECT bf.*, fb.item_name, fb.category, fb.price 
-    FROM booking_food bf
-    LEFT JOIN food_beverages fb ON bf.f_id = fb.f_id
-    WHERE bf.b_id = ?
+    SELECT po.*, fb.item_name, fb.category, fb.price 
+    FROM preorders po
+    LEFT JOIN food_beverages fb ON po.f_id = fb.f_id
+    WHERE po.b_id = ? AND po.status != 'cancelled'
 ");
 $food_query->bind_param("i", $booking_id);
 $food_query->execute();
@@ -175,6 +175,7 @@ $receipt_date = $booking_date;
             --danger: #d63031;
             --info: #0984e3;
             --purple: #6c5ce7;
+            --preorder: #e67e22;
         }
 
         * {
@@ -490,6 +491,25 @@ $receipt_date = $booking_date;
             border: 1px solid rgba(214, 48, 49, 0.3);
         }
 
+        .food-status {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 12px;
+            background: rgba(230, 126, 34, 0.15);
+            color: var(--preorder);
+            margin-left: 8px;
+        }
+
+        .food-status.prepared {
+            background: rgba(0, 184, 148, 0.15);
+            color: var(--success);
+        }
+
+        .food-status.cancelled {
+            background: rgba(214, 48, 49, 0.15);
+            color: var(--danger);
+        }
+
         .receipt-footer {
             padding: 25px;
             background: rgba(0, 0, 0, 0.2);
@@ -607,7 +627,6 @@ $receipt_date = $booking_date;
             font-style: italic;
         }
 
-        /* Print styles removed */
         @media (max-width: 768px) {
             header {
                 padding: 15px 20px;
@@ -674,8 +693,8 @@ $receipt_date = $booking_date;
                 <?php echo htmlspecialchars($name); ?> (<?php echo ucfirst($role); ?>)
             </div>
             
-            <a href="my-bookings.php?id=<?php echo $booking_id; ?>" class="back-btn">
-                <i class="fas fa-arrow-left"></i> Back to My Bookings
+            <a href="booking-details.php?id=<?php echo $booking_id; ?>" class="back-btn">
+                <i class="fas fa-arrow-left"></i> Back to Booking Details
             </a>
         </div>
     </header>
@@ -710,7 +729,7 @@ $receipt_date = $booking_date;
                 </div>
                 <div class="info-item">
                     <span class="info-label">Issue Date</span>
-                    <span class="info-value"><?php echo $receipt_date; ?></span>
+                    <span class="info-value"><?php echo $issue_date; ?></span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Issue Time</span>
@@ -798,16 +817,17 @@ $receipt_date = $booking_date;
                 </div>
             </div>
 
-            <!-- Food Items -->
+            <!-- Food Items from Preorders -->
             <?php if (!empty($food_items)): ?>
             <div class="section">
-                <h2 class="section-title"><i class="fas fa-utensils"></i> Food & Beverages</h2>
+                <h2 class="section-title"><i class="fas fa-utensils"></i> Pre-Ordered Food & Beverages</h2>
                 <table class="items-table">
                     <thead>
                         <tr>
                             <th>Item</th>
                             <th>Category</th>
                             <th class="text-center">Quantity</th>
+                            <th>Status</th>
                             <th class="text-right">Unit Price</th>
                             <th class="text-right">Amount</th>
                         </tr>
@@ -818,13 +838,18 @@ $receipt_date = $booking_date;
                             <td><?php echo htmlspecialchars($food['item_name'] ?? 'Unknown item'); ?></td>
                             <td><?php echo $food['category'] ?? 'General'; ?></td>
                             <td class="text-center"><?php echo $food['quantity']; ?></td>
+                            <td>
+                                <span class="food-status <?php echo $food['status'] ?? 'pending'; ?>">
+                                    <?php echo ucfirst($food['status'] ?? 'pending'); ?>
+                                </span>
+                            </td>
                             <td class="text-right">₹<?php echo number_format($food['price'] ?? 0, 2); ?></td>
                             <td class="text-right">₹<?php echo number_format($food['subtotal'], 2); ?></td>
                         </tr>
                         <?php endforeach; ?>
                         <?php if (count($food_items) > 0): ?>
                         <tr style="background: rgba(233, 69, 96, 0.1);">
-                            <td colspan="4" style="text-align: right; font-weight: 600;">Food & Beverages Total:</td>
+                            <td colspan="5" style="text-align: right; font-weight: 600;">Pre-Ordered Food & Beverages Total:</td>
                             <td class="text-right" style="font-weight: 700; color: var(--highlight);">
                                 ₹<?php echo number_format($food_cost, 2); ?>
                             </td>
@@ -846,7 +871,7 @@ $receipt_date = $booking_date;
                     
                     <?php if (!empty($food_items)): ?>
                     <div class="cost-row">
-                        <span class="cost-label">Food & Beverages</span>
+                        <span class="cost-label">Pre-Ordered Food & Beverages</span>
                         <span class="cost-value">₹<?php echo number_format($food_cost, 2); ?></span>
                     </div>
                     <?php endif; ?>
@@ -868,12 +893,14 @@ $receipt_date = $booking_date;
                     
                     <div class="cost-row">
                         <span class="cost-label">Amount Paid</span>
-                        <span class="cost-value">₹<?php echo number_format($deposit_amount, 2); ?></span>
+                        <span class="cost-value" style="color: var(--success);">₹<?php echo number_format($deposit_amount, 2); ?></span>
                     </div>
                     
                     <div class="cost-row total">
                         <span class="cost-label">Balance Due</span>
-                        <span class="cost-value">₹<?php echo number_format($balance_due, 2); ?></span>
+                        <span class="cost-value" style="color: <?php echo $balance_due > 0.01 ? 'var(--highlight)' : 'var(--success)'; ?>;">
+                            ₹<?php echo number_format($balance_due, 2); ?>
+                        </span>
                     </div>
                 </div>
             </div>

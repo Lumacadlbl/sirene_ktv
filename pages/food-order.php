@@ -298,7 +298,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         exit;
     }
     
-    // PLACE ORDER - Save to booking_food table
+    // ===== MODIFIED: PLACE ORDER - Save to preorders table =====
     if ($_POST['action'] === 'place_order') {
         session_start();
         $booking_id = intval($_POST['booking_id']);
@@ -323,26 +323,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         
         $booking_info = $check_booking->fetch_assoc();
         
+        // Calculate scheduled delivery time (for pre-orders, it's the booking start time)
+        $scheduled_datetime = $booking_info['booking_date'] . ' ' . $booking_info['start_time'];
+        
         // Start transaction
         $conn->begin_transaction();
         
         try {
             $success_count = 0;
             
-            // Insert each item into booking_food table
+            // Insert each item into preorders table
             foreach ($items as $item) {
                 $food_id = intval($item['food_id']);
                 $quantity = intval($item['quantity']);
                 $price = floatval($item['price']);
                 
-                // Insert into booking_food table
-                $insert_query = "INSERT INTO booking_food (b_id, f_id, quantity, price, served) 
-                                 VALUES ($booking_id, $food_id, $quantity, $price, 'pending')";
+                // Get preparation time from food_beverages table
+                $food_query = $conn->query("SELECT preparation_time, stock FROM food_beverages WHERE f_id = $food_id");
+                $prep_time = 15; // default
+                $current_stock = 0;
+                
+                if ($food_query && $food_query->num_rows > 0) {
+                    $food_data = $food_query->fetch_assoc();
+                    $prep_time = intval($food_data['preparation_time'] ?? 15);
+                    $current_stock = intval($food_data['stock'] ?? 0);
+                }
+                
+                // Check if enough stock
+                if ($current_stock < $quantity) {
+                    throw new Exception("Insufficient stock for item ID: $food_id. Available: $current_stock");
+                }
+                
+                // Insert into preorders table
+                $insert_query = "INSERT INTO preorders 
+                    (b_id, f_id, quantity, price, status, order_time, preparation_time, scheduled_for) 
+                    VALUES 
+                    ($booking_id, $food_id, $quantity, $price, 'pending', NOW(), $prep_time, '$scheduled_datetime')";
                 
                 if ($conn->query($insert_query)) {
                     $success_count++;
+                    
+                    // Update stock in food_beverages (reduce by ordered quantity)
+                    $conn->query("UPDATE food_beverages SET stock = stock - $quantity WHERE f_id = $food_id");
                 } else {
-                    throw new Exception("Failed to insert food item: " . $conn->error);
+                    throw new Exception("Failed to insert pre-order: " . $conn->error);
                 }
             }
             
@@ -359,7 +383,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             
             echo json_encode([
                 'success' => true, 
-                'message' => 'Order placed successfully!',
+                'message' => 'Pre-order placed successfully!',
                 'items_added' => $success_count,
                 'cart' => $_SESSION['food_cart'],
                 'booking' => [
@@ -385,7 +409,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Order Food & Drinks - Sirene KTV</title>
+    <title>Pre-Order Food & Drinks - Sirene KTV</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         /* Your existing CSS remains exactly the same */
@@ -400,6 +424,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             --warning: #fdcb6e;
             --danger: #d63031;
             --info: #0984e3;
+            --preorder: #6c5ce7;
         }
 
         * {
@@ -555,10 +580,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             color: var(--light);
         }
 
-        /* Delivery Information Banner */
-        .delivery-info-banner {
-            background: rgba(9, 132, 227, 0.15);
-            border: 1px solid var(--info);
+        /* Pre-order Information Banner */
+        .preorder-info-banner {
+            background: rgba(108, 92, 231, 0.15);
+            border: 1px solid var(--preorder);
             border-radius: 10px;
             padding: 15px 20px;
             margin-bottom: 25px;
@@ -568,37 +593,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             flex-wrap: wrap;
         }
 
-        .delivery-icon {
+        .preorder-icon {
             width: 50px;
             height: 50px;
-            background: rgba(9, 132, 227, 0.2);
+            background: rgba(108, 92, 231, 0.2);
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
         }
 
-        .delivery-icon i {
+        .preorder-icon i {
             font-size: 24px;
-            color: var(--info);
+            color: var(--preorder);
         }
 
-        .delivery-info-text {
+        .preorder-info-text {
             flex: 1;
         }
 
-        .delivery-info-text h4 {
+        .preorder-info-text h4 {
             font-size: 16px;
             margin-bottom: 5px;
-            color: var(--info);
+            color: var(--preorder);
         }
 
-        .delivery-info-text p {
+        .preorder-info-text p {
             font-size: 14px;
             color: rgba(255, 255, 255, 0.8);
         }
 
-        .delivery-room-details {
+        .preorder-room-details {
             background: rgba(255, 255, 255, 0.05);
             padding: 10px 20px;
             border-radius: 30px;
@@ -608,8 +633,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             font-weight: 600;
         }
 
-        .delivery-room-details i {
-            color: var(--highlight);
+        .preorder-room-details i {
+            color: var(--preorder);
         }
 
         .food-tablet-container {
@@ -813,7 +838,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         .cart-header h3 i {
-            color: var(--highlight);
+            color: var(--preorder);
         }
 
         .cart-items {
@@ -871,7 +896,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         .quantity-btn:hover:not(:disabled) {
-            background: var(--highlight);
+            background: var(--preorder);
         }
 
         .quantity-btn:disabled {
@@ -914,14 +939,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         .cart-total span:last-child {
-            color: var(--highlight);
+            color: var(--preorder);
             font-size: 22px;
         }
 
         .checkout-btn {
             width: 100%;
             padding: 14px;
-            background: linear-gradient(135deg, var(--highlight), #ff4757);
+            background: linear-gradient(135deg, var(--preorder), #a363d9);
             color: white;
             border: none;
             border-radius: 10px;
@@ -937,7 +962,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         .checkout-btn:hover:not(:disabled) {
             transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(233, 69, 96, 0.4);
+            box-shadow: 0 8px 20px rgba(108, 92, 231, 0.4);
         }
 
         .checkout-btn:disabled {
@@ -981,7 +1006,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             border-radius: 20px;
             max-width: 400px;
             width: 90%;
-            border: 2px solid var(--highlight);
+            border: 2px solid var(--preorder);
             animation: modalSlideIn 0.3s;
         }
 
@@ -992,7 +1017,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         .quantity-modal-header i {
             font-size: 50px;
-            color: var(--highlight);
+            color: var(--preorder);
             margin-bottom: 10px;
         }
 
@@ -1031,14 +1056,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         .quantity-control-btn:hover {
-            background: var(--highlight);
-            border-color: var(--highlight);
+            background: var(--preorder);
+            border-color: var(--preorder);
         }
 
         .quantity-display {
             font-size: 40px;
             font-weight: 700;
-            color: var(--highlight);
+            color: var(--preorder);
             min-width: 60px;
             text-align: center;
         }
@@ -1065,7 +1090,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         .quantity-modal-btn.confirm {
-            background: linear-gradient(135deg, var(--highlight), #ff4757);
+            background: linear-gradient(135deg, var(--preorder), #a363d9);
             color: white;
         }
 
@@ -1151,7 +1176,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         .detail-icon {
             width: 40px;
             height: 40px;
-            background: rgba(233, 69, 96, 0.1);
+            background: rgba(108, 92, 231, 0.1);
             border-radius: 10px;
             display: flex;
             align-items: center;
@@ -1160,7 +1185,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 
         .detail-icon i {
             font-size: 18px;
-            color: var(--highlight);
+            color: var(--preorder);
         }
 
         .detail-text {
@@ -1256,7 +1281,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         .booking-room-info i {
-            color: var(--highlight);
+            color: var(--preorder);
         }
 
         .notification {
@@ -1320,6 +1345,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             to { transform: rotate(360deg); }
         }
 
+        .preorder-badge {
+            background: var(--preorder);
+            color: white;
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 12px;
+            margin-left: 8px;
+        }
+
         @media (max-width: 1024px) {
             .food-tablet-container {
                 grid-template-columns: 1fr;
@@ -1360,7 +1394,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 width: 100%;
             }
             
-            .delivery-info-banner {
+            .preorder-info-banner {
                 flex-direction: column;
                 text-align: center;
             }
@@ -1393,7 +1427,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     <div class="quantity-modal-content">
         <div class="quantity-modal-header">
             <i class="fas fa-utensils"></i>
-            <h3 id="modalFoodName">Add to Cart</h3>
+            <h3 id="modalFoodName">Add to Pre-Order</h3>
             <p id="modalFoodPrice">Select quantity</p>
         </div>
         
@@ -1405,7 +1439,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         
         <div class="quantity-modal-actions">
             <button class="quantity-modal-btn cancel" onclick="closeQuantityModal()">Cancel</button>
-            <button class="quantity-modal-btn confirm" id="confirmAddBtn" onclick="debouncedAddToCart()">Add to Cart</button>
+            <button class="quantity-modal-btn confirm" id="confirmAddBtn" onclick="debouncedAddToCart()">Add to Pre-Order</button>
         </div>
     </div>
 </div>
@@ -1416,8 +1450,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <div class="success-icon">
             <i class="fas fa-check-circle"></i>
         </div>
-        <h2>Order Placed Successfully!</h2>
-        <p>Your food and drinks have been ordered and will be prepared shortly.</p>
+        <h2>Pre-Order Placed Successfully!</h2>
+        <p>Your food and drinks have been pre-ordered and will be prepared for your booking.</p>
         
         <div class="delivery-details-card" id="deliveryDetails">
             <!-- Will be populated dynamically -->
@@ -1442,7 +1476,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 <header>
     <div class="header-left">
         <h1><i class="fas fa-microphone-alt"></i> Sirene KTV</h1>
-        <p>Order Food & Drinks</p>
+        <p>Pre-Order Food & Drinks <span class="preorder-badge">Pre-Order</span></p>
     </div>
     <div class="header-right">
         <div class="welcome-message">
@@ -1470,7 +1504,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <i class="fas fa-calendar-check"></i>
             <div>
                 <h2>Your Active Bookings</h2>
-                <p>Select a booking to order food for delivery to your room</p>
+                <p>Select a booking to pre-order food for delivery during your session</p>
             </div>
         </div>
         
@@ -1489,7 +1523,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <?php else: ?>
         <div class="booking-selector">
             <div style="padding: 10px 0; font-weight: 600;">
-                <i class="fas fa-door-closed" style="color: var(--highlight); margin-right: 8px;"></i>
+                <i class="fas fa-door-closed" style="color: var(--preorder); margin-right: 8px;"></i>
                 <?php echo htmlspecialchars($active_bookings[0]['room_name']); ?> - 
                 <?php echo formatDisplayDate($active_bookings[0]['booking_date']); ?> 
                 <?php echo formatDisplayTime($active_bookings[0]['start_time']); ?> - 
@@ -1500,16 +1534,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <?php endif; ?>
     </div>
 
-    <!-- Delivery Information Banner - CLEARLY SHOWS WHERE FOOD WILL BE DELIVERED -->
-    <div class="delivery-info-banner" id="deliveryBanner">
-        <div class="delivery-icon">
-            <i class="fas fa-concierge-bell"></i>
+    <!-- Pre-order Information Banner - CLEARLY SHOWS WHERE FOOD WILL BE DELIVERED -->
+    <div class="preorder-info-banner" id="deliveryBanner">
+        <div class="preorder-icon">
+            <i class="fas fa-clock"></i>
         </div>
-        <div class="delivery-info-text">
-            <h4><i class="fas fa-info-circle"></i> Room Service Delivery</h4>
-            <p id="deliveryMessage">Your order will be delivered directly to your room during your booking session.</p>
+        <div class="preorder-info-text">
+            <h4><i class="fas fa-info-circle"></i> Pre-Order Delivery</h4>
+            <p id="deliveryMessage">Your pre-order will be prepared and delivered to your room during your booking session.</p>
         </div>
-        <div class="delivery-room-details" id="currentRoomDisplay">
+        <div class="preorder-room-details" id="currentRoomDisplay">
             <?php if ($active_bookings_count > 0): ?>
             <i class="fas fa-door-closed"></i>
             <span><?php echo htmlspecialchars($active_bookings[0]['room_name']); ?></span>
@@ -1524,7 +1558,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         <div class="food-browser">
             <div class="food-filters">
                 <div class="filter-tabs" id="filterTabs">
-                    <!-- "All Items" filter has been removed -->
                     <?php foreach ($categories as $category): ?>
                         <button class="filter-tab <?php echo $category === $categories[0] ? 'active' : ''; ?>" onclick="filterFood('<?php echo $category; ?>', event)"><?php echo $category; ?></button>
                     <?php endforeach; ?>
@@ -1572,12 +1605,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             </div>
         </div>
         
-        <!-- Food Cart -->
+        <!-- Pre-Order Cart -->
         <div class="food-cart">
             <div class="cart-header">
-                <h3><i class="fas fa-shopping-cart"></i> Your Order</h3>
+                <h3><i class="fas fa-shopping-cart"></i> Your Pre-Order</h3>
                 <div style="display: flex; align-items: center; gap: 10px;">
-                    <span style="background: var(--highlight); padding: 4px 8px; border-radius: 12px; font-size: 11px;" id="cartItemCount">0</span>
+                    <span style="background: var(--preorder); padding: 4px 8px; border-radius: 12px; font-size: 11px;" id="cartItemCount">0</span>
                     <button class="clear-cart-btn" onclick="clearCart()" id="clearCartBtn" style="display: none;">
                         <i class="fas fa-trash"></i> Clear
                     </button>
@@ -1588,15 +1621,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <!-- Cart items will be loaded here dynamically -->
                 <div class="empty-cart">
                     <i class="fas fa-shopping-basket"></i>
-                    <p>Your cart is empty</p>
-                    <p style="font-size: 13px;">Click on any food item to add to your order</p>
+                    <p>Your pre-order cart is empty</p>
+                    <p style="font-size: 13px;">Click on any food item to add to your pre-order</p>
                 </div>
             </div>
             
             <div class="cart-footer">
                 <!-- Delivery destination reminder -->
-                <div style="background: rgba(9, 132, 227, 0.1); border-radius: 8px; padding: 10px; margin-bottom: 15px; font-size: 13px; display: flex; align-items: center; gap: 8px;">
-                    <i class="fas fa-map-pin" style="color: var(--info);"></i>
+                <div style="background: rgba(108, 92, 231, 0.1); border-radius: 8px; padding: 10px; margin-bottom: 15px; font-size: 13px; display: flex; align-items: center; gap: 8px;">
+                    <i class="fas fa-map-pin" style="color: var(--preorder);"></i>
                     <span>Delivering to: <strong id="cartDeliveryRoom"><?php echo htmlspecialchars($active_bookings[0]['room_name']); ?></strong></span>
                 </div>
                 
@@ -1605,10 +1638,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <span id="cartTotal"><?php echo $currency_symbol; ?>0.00</span>
                 </div>
                 <button class="checkout-btn" id="checkoutBtn" onclick="placeOrder()" disabled>
-                    <i class="fas fa-check-circle"></i> Place Order
+                    <i class="fas fa-check-circle"></i> Place Pre-Order
                 </button>
                 <p style="color: rgba(255,255,255,0.5); font-size: 12px; margin-top: 10px; text-align: center;">
-                    <i class="fas fa-clock"></i> Items will be delivered during your booking
+                    <i class="fas fa-clock"></i> Items will be prepared for your booking time
                 </p>
                 <div id="syncStatus" style="display: none; margin-top: 8px; font-size: 11px; color: #ffc107; text-align: center;">
                     <i class="fas fa-sync-alt fa-spin"></i> Syncing...
@@ -1650,7 +1683,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     // Booking details for display
     let bookingsData = <?php echo json_encode($active_bookings); ?>;
     
-    console.log('Food order page loaded');
+    console.log('Food pre-order page loaded');
     console.log('Active bookings:', activeBookingIds);
     console.log('Current cart:', cart);
     
@@ -1745,7 +1778,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 const formattedStart = formatTime(start);
                 const formattedEnd = formatTime(end);
                 document.getElementById('deliveryMessage').innerHTML = 
-                    `Your order will be delivered to <strong>${roomName}</strong> during your booking on ${formattedDate} from ${formattedStart} to ${formattedEnd}.`;
+                    `Your pre-order will be delivered to <strong>${roomName}</strong> during your booking on ${formattedDate} from ${formattedStart} to ${formattedEnd}.`;
             }
         }
         
@@ -1845,7 +1878,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         
         let bookingId = currentBookingId;
         
-        console.log('Adding to cart:', {foodId: currentFoodId, quantity: selectedQuantity, bookingId: bookingId});
+        console.log('Adding to pre-order cart:', {foodId: currentFoodId, quantity: selectedQuantity, bookingId: bookingId});
         
         // Check for duplicate pending request
         const requestKey = `${currentFoodId}_${bookingId}`;
@@ -1876,7 +1909,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 console.log('Cart after add:', cart);
                 updateCartDisplay();
                 closeQuantityModal();
-                showNotification('✓ Item added to cart!', 'success');
+                showNotification('✓ Item added to pre-order!', 'success');
             } else {
                 showNotification('❌ Error: ' + (data.message || 'Could not add item'), 'error');
             }
@@ -1973,7 +2006,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     
     // Remove from cart
     function removeFromCart(index) {
-        if (confirm('Remove this item from your order?')) {
+        if (confirm('Remove this item from your pre-order?')) {
             console.log('Removing cart item:', index);
             
             fetchWithRetry(window.location.href, {
@@ -2000,7 +2033,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     
     // Clear cart for current booking
     function clearCart() {
-        if (confirm('Clear all items from your cart?')) {
+        if (confirm('Clear all items from your pre-order?')) {
             fetchWithRetry(window.location.href, {
                 method: 'POST',
                 headers: {
@@ -2014,7 +2047,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     cart = data.cart;
                     console.log('Cart after clear:', cart);
                     updateCartDisplay();
-                    showNotification('Cart cleared', 'info');
+                    showNotification('Pre-order cart cleared', 'info');
                 }
             })
             .catch(error => {
@@ -2046,8 +2079,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             cartItems.innerHTML = `
                 <div class="empty-cart">
                     <i class="fas fa-shopping-basket"></i>
-                    <p>Your cart is empty</p>
-                    <p style="font-size: 13px;">Click on any food item to add to your order</p>
+                    <p>Your pre-order cart is empty</p>
+                    <p style="font-size: 13px;">Click on any food item to add to your pre-order</p>
                 </div>
             `;
             if (cartItemCount) cartItemCount.textContent = '0';
@@ -2100,12 +2133,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         if (checkoutBtn) checkoutBtn.disabled = false;
     }
     
-    // Place order
+    // Place pre-order
     function placeOrder() {
         const bookingCartItems = cart.filter(item => item.booking_id == currentBookingId);
         
         if (bookingCartItems.length === 0) {
-            showNotification('Your cart is empty', 'error');
+            showNotification('Your pre-order cart is empty', 'error');
             return;
         }
         
@@ -2122,7 +2155,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         // Show confirmation with order details using a modal instead of confirm popup
         let orderSummary = `
             <div style="text-align: left; margin: 20px 0;">
-                <h4 style="margin-bottom: 15px; color: var(--light);">Order Summary</h4>
+                <h4 style="margin-bottom: 15px; color: var(--light);">Pre-Order Summary</h4>
         `;
         
         bookingCartItems.forEach(item => {
@@ -2130,15 +2163,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             orderSummary += `
                 <div style="display: flex; justify-content: space-between; margin-bottom: 10px; padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,0.1);">
                     <span>${item.item_name} x${item.quantity}</span>
-                    <span style="color: var(--highlight);">${currencySymbol}${itemTotal.toFixed(2)}</span>
+                    <span style="color: var(--preorder);">${currencySymbol}${itemTotal.toFixed(2)}</span>
                 </div>
             `;
         });
         
         orderSummary += `
-                <div style="margin-top: 15px; padding-top: 10px; border-top: 2px solid var(--highlight); display: flex; justify-content: space-between; font-weight: 700; font-size: 18px;">
+                <div style="margin-top: 15px; padding-top: 10px; border-top: 2px solid var(--preorder); display: flex; justify-content: space-between; font-weight: 700; font-size: 18px;">
                     <span>Total:</span>
-                    <span style="color: var(--highlight);">${currencySymbol}${total.toFixed(2)}</span>
+                    <span style="color: var(--preorder);">${currencySymbol}${total.toFixed(2)}</span>
                 </div>
             </div>
         `;
@@ -2150,21 +2183,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         confirmModal.innerHTML = `
             <div class="quantity-modal-content" style="max-width: 450px;">
                 <div class="quantity-modal-header">
-                    <i class="fas fa-shopping-cart"></i>
-                    <h3>Confirm Your Order</h3>
-                    <p>Your order will be delivered to <strong>${roomName}</strong></p>
+                    <i class="fas fa-clock"></i>
+                    <h3>Confirm Your Pre-Order</h3>
+                    <p>Your pre-order will be delivered to <strong>${roomName}</strong> during your booking</p>
                 </div>
                 
                 ${orderSummary}
                 
-                <div style="background: rgba(9, 132, 227, 0.1); border-radius: 8px; padding: 12px; margin: 15px 0; font-size: 13px;">
-                    <i class="fas fa-clock" style="color: var(--info); margin-right: 8px;"></i>
-                    Items will be delivered during your booking session
+                <div style="background: rgba(108, 92, 231, 0.1); border-radius: 8px; padding: 12px; margin: 15px 0; font-size: 13px;">
+                    <i class="fas fa-clock" style="color: var(--preorder); margin-right: 8px;"></i>
+                    Items will be prepared in advance for your booking time
                 </div>
                 
                 <div class="quantity-modal-actions">
                     <button class="quantity-modal-btn cancel" onclick="this.closest('.quantity-modal').remove()">Cancel</button>
-                    <button class="quantity-modal-btn confirm" id="confirmOrderBtn">Place Order</button>
+                    <button class="quantity-modal-btn confirm" id="confirmOrderBtn">Place Pre-Order</button>
                 </div>
             </div>
         `;
@@ -2178,10 +2211,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             // Show loading state
             const checkoutBtn = document.getElementById('checkoutBtn');
             const originalText = checkoutBtn.innerHTML;
-            checkoutBtn.innerHTML = '<span class="loading-spinner"></span> Placing Order...';
+            checkoutBtn.innerHTML = '<span class="loading-spinner"></span> Placing Pre-Order...';
             checkoutBtn.disabled = true;
             
-            console.log('Placing order:', {bookingId: currentBookingId, items: bookingCartItems, total});
+            console.log('Placing pre-order:', {bookingId: currentBookingId, items: bookingCartItems, total});
             
             // Send order to server with retry
             fetchWithRetry(window.location.href, {
@@ -2192,7 +2225,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 body: 'action=place_order&booking_id=' + currentBookingId + '&items=' + encodeURIComponent(JSON.stringify(bookingCartItems)) + '&total_amount=' + total
             })
             .then(data => {
-                console.log('Place order response:', data);
+                console.log('Place pre-order response:', data);
                 
                 if (data.success) {
                     // Update cart with returned data
@@ -2207,14 +2240,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     showOrderSuccessModal(data);
                     
                 } else {
-                    showNotification('❌ Error placing order: ' + data.message, 'error');
+                    showNotification('❌ Error placing pre-order: ' + data.message, 'error');
                     checkoutBtn.innerHTML = originalText;
                     checkoutBtn.disabled = false;
                 }
             })
             .catch(error => {
-                console.error('Error placing order:', error);
-                showNotification('❌ Error placing order. Please try again.', 'error');
+                console.error('Error placing pre-order:', error);
+                showNotification('❌ Error placing pre-order. Please try again.', 'error');
                 checkoutBtn.innerHTML = originalText;
                 checkoutBtn.disabled = false;
             });
@@ -2259,7 +2292,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <div class="delivery-detail-item">
                     <div class="detail-icon"><i class="fas fa-utensils"></i></div>
                     <div class="detail-text">
-                        <div class="detail-label">Items Ordered</div>
+                        <div class="detail-label">Items Pre-Ordered</div>
                         <div class="detail-value">${orderData.items_added || 0} item(s)</div>
                     </div>
                 </div>
@@ -2312,7 +2345,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     
     // Initialize on page load
     document.addEventListener('DOMContentLoaded', function() {
-        console.log('Food order page loaded, initializing...');
+        console.log('Food pre-order page loaded, initializing...');
         
         // Set initial delivery information
         if (bookingsData && bookingsData.length > 0) {
@@ -2322,7 +2355,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             const formattedEnd = formatTime(firstBooking.end_time);
             
             document.getElementById('deliveryMessage').innerHTML = 
-                `Your order will be delivered to <strong>${firstBooking.room_name}</strong> during your booking on ${formattedDate} from ${formattedStart} to ${formattedEnd}.`;
+                `Your pre-order will be delivered to <strong>${firstBooking.room_name}</strong> during your booking on ${formattedDate} from ${formattedStart} to ${formattedEnd}.`;
         }
         
         // Set initial filter to first category

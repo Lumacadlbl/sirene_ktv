@@ -23,21 +23,39 @@ if ($booking_id == 0) {
     exit;
 }
 
-// Fetch booking details WITH PAYMENT STATUS - DO THIS FIRST!
+// First, check if this booking belongs to the user or user is admin
+$check_query = $conn->prepare("SELECT u_id FROM booking WHERE b_id = ?");
+$check_query->bind_param("i", $booking_id);
+$check_query->execute();
+$check_result = $check_query->get_result();
+
+if ($check_result->num_rows == 0) {
+    header("Location: my-bookings.php");
+    exit;
+}
+
+$booking_owner = $check_result->fetch_assoc();
+if ($booking_owner['u_id'] != $user_id && $role != 'admin') {
+    header("Location: my-bookings.php");
+    exit;
+}
+
+// Fetch booking details WITH PAYMENT STATUS - IMPROVED QUERY
 $booking_query = $conn->prepare("
     SELECT b.*, r.room_name, r.price_hr, r.capcity,
            u.name as customer_name, u.email as customer_email, u.contact as customer_phone,
-           p.payment_status as actual_payment_status, p.amount as payment_amount,
-           p.payment_method, p.payment_date
+           p.payment_status as actual_payment_status, 
+           SUM(p.amount) as total_paid_amount,
+           GROUP_CONCAT(DISTINCT p.payment_method SEPARATOR ', ') as payment_methods,
+           MAX(p.payment_date) as last_payment_date
     FROM booking b
     LEFT JOIN room r ON b.r_id = r.r_id
     LEFT JOIN user_tbl u ON b.u_id = u.id
     LEFT JOIN payments p ON b.b_id = p.b_id
-    WHERE b.b_id = ? AND (b.u_id = ? OR ? = 'admin')
-    ORDER BY p.payment_date DESC
-    LIMIT 1
+    WHERE b.b_id = ?
+    GROUP BY b.b_id
 ");
-$booking_query->bind_param("iii", $booking_id, $user_id, $role);
+$booking_query->bind_param("i", $booking_id);
 $booking_query->execute();
 $booking_result = $booking_query->get_result();
 
@@ -77,16 +95,15 @@ try {
 // Calculate room cost
 $room_cost = $total_hours * ($booking['price_hr'] ?? 0);
 
-// Fetch food items for this booking - FIXED VERSION
+// Fetch food items for this booking from preorders table
 $food_items = [];
-$food_cost = 0; // Initialize food cost
+$food_cost = 0;
 
-// Query booking_food table instead
 $food_query = $conn->prepare("
-    SELECT bf.*, fb.item_name, fb.category, fb.price 
-    FROM booking_food bf
-    LEFT JOIN food_beverages fb ON bf.f_id = fb.f_id
-    WHERE bf.b_id = ?
+    SELECT po.*, fb.item_name, fb.category, fb.price 
+    FROM preorders po
+    LEFT JOIN food_beverages fb ON po.f_id = fb.f_id
+    WHERE po.b_id = ? AND po.status != 'cancelled'
 ");
 $food_query->bind_param("i", $booking_id);
 $food_query->execute();
@@ -94,40 +111,42 @@ $food_result = $food_query->get_result();
 
 if ($food_result && $food_result->num_rows > 0) {
     while ($food = $food_result->fetch_assoc()) {
-        // Calculate subtotal for each item
         $food['subtotal'] = ($food['price'] ?? 0) * ($food['quantity'] ?? 1);
-        $food_cost += $food['subtotal']; // Add to total food cost
+        $food_cost += $food['subtotal'];
         $food_items[] = $food;
     }
 }
 
-// Now calculate total cost with the correct food cost
+// Calculate total costs
 $total_cost = $room_cost + $food_cost;
-$deposit_amount = $booking['deposit_amount'] ?? 0;
-$balance_due = $total_cost - $deposit_amount;
+$total_paid = floatval($booking['total_paid_amount'] ?? 0);
+$deposit_amount = floatval($booking['deposit_amount'] ?? 0);
+
+// Use the higher of deposit_amount or total_paid
+$amount_paid = max($total_paid, $deposit_amount);
 
 // Calculate taxes
 $tax_rate = 0.18; // 18% tax
 $tax_amount = $total_cost * $tax_rate;
 $grand_total = $total_cost + $tax_amount;
-$balance_due_with_tax = $grand_total - $deposit_amount;
+$balance_due = $grand_total - $amount_paid;
 
-// DETERMINE PAYMENT STATUS CORRECTLY
+// DETERMINE PAYMENT STATUS - IMPROVED LOGIC
 $payment_status = 'Pending';
 $payment_status_class = 'pending';
 
-// Check 1: Actual payment status from payments table
+// Check 1: If balance is very small (due to rounding), consider it paid
+if (abs($balance_due) < 0.01) {
+    $balance_due = 0;
+}
+
+// Check 2: Actual payment status from payments table
 if (!empty($booking['actual_payment_status'])) {
     $actual_status = strtolower($booking['actual_payment_status']);
     
     if (in_array($actual_status, ['completed', 'approved', 'paid', 'success'])) {
         $payment_status = 'Paid';
         $payment_status_class = 'paid';
-        // Update deposit amount to match payment amount
-        if ($booking['payment_amount'] > 0) {
-            $deposit_amount = $booking['payment_amount'];
-            $balance_due_with_tax = $grand_total - $deposit_amount;
-        }
     } elseif ($actual_status == 'partial') {
         $payment_status = 'Partial';
         $payment_status_class = 'partial';
@@ -136,7 +155,7 @@ if (!empty($booking['actual_payment_status'])) {
         $payment_status_class = 'pending';
     }
 } 
-// Check 2: Booking table's payment_status field
+// Check 3: Booking table's payment_status field
 elseif (!empty($booking['payment_status'])) {
     $booking_payment_status = strtolower($booking['payment_status']);
     
@@ -148,15 +167,22 @@ elseif (!empty($booking['payment_status'])) {
         $payment_status_class = 'partial';
     }
 }
-// Check 3: Deposit covers full amount
-elseif ($deposit_amount >= $grand_total) {
+// Check 4: Calculate based on amount paid
+else {
+    if ($amount_paid >= $grand_total - 0.01) { // Small tolerance for floating point
+        $payment_status = 'Paid';
+        $payment_status_class = 'paid';
+    } elseif ($amount_paid > 0) {
+        $payment_status = 'Partial';
+        $payment_status_class = 'partial';
+    }
+}
+
+// Override if balance is zero or negative
+if ($balance_due <= 0.01) {
     $payment_status = 'Paid';
     $payment_status_class = 'paid';
-}
-// Check 4: Partial deposit
-elseif ($deposit_amount > 0) {
-    $payment_status = 'Partial';
-    $payment_status_class = 'partial';
+    $balance_due = 0;
 }
 
 // Status colors
@@ -178,8 +204,8 @@ $created_at = isset($booking['created_at']) ? date('F d, Y g:i A', strtotime($bo
 
 // Format payment date if exists
 $payment_date_formatted = 'Not paid yet';
-if (!empty($booking['payment_date'])) {
-    $payment_date_formatted = date('F d, Y g:i A', strtotime($booking['payment_date']));
+if (!empty($booking['last_payment_date'])) {
+    $payment_date_formatted = date('F d, Y g:i A', strtotime($booking['last_payment_date']));
 }
 
 // Format start and end times
@@ -205,6 +231,19 @@ try {
 } catch (Exception $e) {
     error_log("Time formatting error: " . $e->getMessage());
 }
+
+// Check if booking can be cancelled
+$can_cancel = in_array($booking['status'], ['pending', 'confirmed']) && $role != 'admin';
+
+// Check if payment button should be shown
+$show_payment_button = (
+    $payment_status !== 'Paid' && 
+    $balance_due > 0.01 && 
+    !in_array($booking['status'], ['cancelled', 'completed'])
+);
+
+// For debugging - remove in production
+error_log("Booking ID: $booking_id - Status: $payment_status, Balance: $balance_due, Amount Paid: $amount_paid, Grand Total: $grand_total");
 ?>
 
 <!DOCTYPE html>
@@ -249,6 +288,8 @@ try {
             justify-content: space-between;
             align-items: center;
             border-bottom: 2px solid var(--highlight);
+            flex-wrap: wrap;
+            gap: 15px;
         }
 
         .header-left h1 {
@@ -269,6 +310,7 @@ try {
             display: flex;
             align-items: center;
             gap: 18px;
+            flex-wrap: wrap;
         }
 
         .user-info {
@@ -343,6 +385,8 @@ try {
             padding: 25px;
             border-radius: 15px;
             border-left: 4px solid var(--highlight);
+            flex-wrap: wrap;
+            gap: 15px;
         }
 
         .booking-title h2 {
@@ -352,6 +396,7 @@ try {
             display: flex;
             align-items: center;
             gap: 10px;
+            flex-wrap: wrap;
         }
 
         .booking-title h2 i {
@@ -460,6 +505,12 @@ try {
             box-shadow: 0 8px 20px rgba(253, 203, 110, 0.3);
         }
 
+        .action-btn.disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
         .main-content {
             display: grid;
             grid-template-columns: 2fr 1fr;
@@ -473,6 +524,12 @@ try {
             padding: 25px;
             border: 1px solid rgba(255, 255, 255, 0.1);
             margin-bottom: 25px;
+            transition: all 0.3s;
+        }
+
+        .info-card:hover {
+            background: rgba(255, 255, 255, 0.08);
+            transform: translateY(-2px);
         }
 
         .card-header {
@@ -527,6 +584,7 @@ try {
             display: flex;
             align-items: center;
             gap: 8px;
+            flex-wrap: wrap;
         }
 
         .info-value i {
@@ -566,6 +624,8 @@ try {
             border-radius: 10px;
             border: 1px solid rgba(255, 255, 255, 0.1);
             transition: all 0.2s;
+            flex-wrap: wrap;
+            gap: 10px;
         }
 
         .food-item:hover {
@@ -577,12 +637,14 @@ try {
             font-weight: 600;
             color: var(--light);
             flex: 2;
+            min-width: 150px;
         }
 
         .food-category {
             color: rgba(255, 255, 255, 0.7);
             font-size: 13px;
             flex: 1;
+            min-width: 80px;
         }
 
         .food-quantity {
@@ -599,8 +661,26 @@ try {
         .food-price {
             font-weight: 700;
             color: var(--highlight);
-            min-width: 100px;
+            min-width: 120px;
             text-align: right;
+        }
+
+        .food-status {
+            font-size: 11px;
+            padding: 3px 8px;
+            border-radius: 12px;
+            background: rgba(230, 126, 34, 0.15);
+            color: #e67e22;
+        }
+
+        .food-status.prepared {
+            background: rgba(0, 184, 148, 0.15);
+            color: var(--success);
+        }
+
+        .food-status.cancelled {
+            background: rgba(214, 48, 49, 0.15);
+            color: var(--danger);
         }
 
         .cost-summary {
@@ -719,6 +799,39 @@ try {
             margin-top: 3px;
         }
 
+        .alert {
+            padding: 15px 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .alert-info {
+            background: rgba(9, 132, 227, 0.2);
+            border: 1px solid rgba(9, 132, 227, 0.3);
+            color: var(--info);
+        }
+
+        .alert-success {
+            background: rgba(0, 184, 148, 0.2);
+            border: 1px solid rgba(0, 184, 148, 0.3);
+            color: var(--success);
+        }
+
+        .alert-warning {
+            background: rgba(253, 203, 110, 0.2);
+            border: 1px solid rgba(253, 203, 110, 0.3);
+            color: var(--warning);
+        }
+
+        .alert-danger {
+            background: rgba(214, 48, 49, 0.2);
+            border: 1px solid rgba(214, 48, 49, 0.3);
+            color: var(--danger);
+        }
+
         footer {
             text-align: center;
             padding: 22px;
@@ -738,6 +851,7 @@ try {
             justify-content: center;
             gap: 18px;
             margin-top: 10px;
+            flex-wrap: wrap;
         }
 
         .footer-links a {
@@ -756,23 +870,11 @@ try {
             .main-content {
                 grid-template-columns: 1fr;
             }
-            
-            header {
-                flex-direction: column;
-                gap: 15px;
-            }
-            
-            .header-right {
-                flex-direction: column;
-                width: 100%;
-            }
         }
 
         @media (max-width: 768px) {
             header {
-                padding: 15px 20px;
                 flex-direction: column;
-                gap: 15px;
                 text-align: center;
             }
             
@@ -786,19 +888,24 @@ try {
                 justify-content: center;
             }
             
-            .container {
-                padding: 0 15px;
-            }
-            
             .booking-header {
                 flex-direction: column;
-                gap: 15px;
                 text-align: center;
             }
             
             .booking-badge {
                 margin-left: 0;
                 margin-top: 10px;
+            }
+            
+            .food-item {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            
+            .food-price {
+                text-align: left;
+                width: 100%;
             }
         }
 
@@ -813,17 +920,6 @@ try {
             
             .card-header h3 {
                 font-size: 16px;
-            }
-            
-            .food-item {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 10px;
-            }
-            
-            .food-price {
-                text-align: left;
-                width: 100%;
             }
         }
     </style>
@@ -854,6 +950,16 @@ try {
 </header>
 
 <div class="container">
+    <!-- Payment Success Message (if any) -->
+    <?php if (isset($_GET['payment']) && $_GET['payment'] == 'success'): ?>
+    <div class="alert alert-success">
+        <i class="fas fa-check-circle"></i>
+        <div>
+            <strong>Payment Successful!</strong> Your payment has been processed successfully. Thank you for your booking.
+        </div>
+    </div>
+    <?php endif; ?>
+
     <div class="booking-header">
         <div class="booking-title">
             <h2>
@@ -867,7 +973,7 @@ try {
         </div>
         <div>
             <span class="payment-status <?php echo $payment_status_class; ?>">
-                <?php echo $payment_status; ?> Payment
+                <i class="fas fa-circle"></i> <?php echo $payment_status; ?> Payment
             </span>
         </div>
     </div>
@@ -879,13 +985,13 @@ try {
                 <i class="fas fa-file-invoice"></i> View Receipt
             </a>
             
-            <?php if ($payment_status !== 'Paid' && $balance_due_with_tax > 0): ?>
+            <?php if ($show_payment_button): ?>
             <a href="payment.php?id=<?php echo $booking_id; ?>" class="action-btn payment">
-                <i class="fas fa-credit-card"></i> Make Payment
+                <i class="fas fa-credit-card"></i> Make Payment (₹<?php echo number_format($balance_due, 2); ?>)
             </a>
             <?php endif; ?>
             
-            <?php if (($booking['status'] == 'pending' || $booking['status'] == 'confirmed') && $role != 'admin'): ?>
+            <?php if ($can_cancel): ?>
             <button class="action-btn cancel" onclick="cancelBooking()">
                 <i class="fas fa-times-circle"></i> Cancel Booking
             </button>
@@ -898,6 +1004,23 @@ try {
             <?php endif; ?>
         </div>
     </div>
+
+    <!-- Balance Due Alert -->
+    <?php if ($balance_due > 0.01 && $payment_status !== 'Paid'): ?>
+    <div class="alert alert-warning">
+        <i class="fas fa-exclamation-triangle"></i>
+        <div>
+            <strong>Balance Due: ₹<?php echo number_format($balance_due, 2); ?></strong> - Please complete your payment to confirm the booking.
+        </div>
+    </div>
+    <?php elseif ($payment_status === 'Paid'): ?>
+    <div class="alert alert-success">
+        <i class="fas fa-check-circle"></i>
+        <div>
+            <strong>Payment Complete!</strong> This booking has been fully paid. Thank you for your payment.
+        </div>
+    </div>
+    <?php endif; ?>
 
     <div class="main-content">
         <div>
@@ -976,12 +1099,12 @@ try {
                 </div>
             </div>
 
-            <!-- Food & Drinks -->
+            <!-- Food & Drinks from Preorders -->
             <?php if (!empty($food_items)): ?>
             <div class="info-card">
                 <div class="card-header">
                     <i class="fas fa-utensils"></i>
-                    <h3>Food & Drinks</h3>
+                    <h3>Food & Drinks (Pre-Orders)</h3>
                 </div>
                 <div class="food-items">
                     <?php foreach ($food_items as $food): ?>
@@ -989,6 +1112,9 @@ try {
                         <div class="food-name"><?php echo htmlspecialchars($food['item_name'] ?? 'Unknown item'); ?></div>
                         <div class="food-category"><?php echo $food['category'] ?? 'General'; ?></div>
                         <div class="food-quantity">Qty: <?php echo $food['quantity']; ?></div>
+                        <div class="food-status <?php echo $food['status']; ?>">
+                            <?php echo ucfirst($food['status'] ?? 'pending'); ?>
+                        </div>
                         <div class="food-price">
                             ₹<?php echo number_format($food['price'] ?? 0, 2); ?> × <?php echo $food['quantity']; ?> = 
                             ₹<?php echo number_format($food['subtotal'], 2); ?>
@@ -1015,7 +1141,7 @@ try {
                     
                     <?php if (!empty($food_items)): ?>
                     <div class="cost-row">
-                        <span class="cost-label">Food & Drinks</span>
+                        <span class="cost-label">Food & Drinks (Pre-Orders)</span>
                         <span class="cost-value">₹<?php echo number_format($food_cost, 2); ?></span>
                     </div>
                     <?php endif; ?>
@@ -1037,13 +1163,13 @@ try {
                     
                     <div class="cost-row">
                         <span class="cost-label">Amount Paid</span>
-                        <span class="cost-value" style="color: var(--success);">₹<?php echo number_format($deposit_amount, 2); ?></span>
+                        <span class="cost-value" style="color: var(--success);">₹<?php echo number_format($amount_paid, 2); ?></span>
                     </div>
                     
                     <div class="cost-row total">
                         <span class="cost-label">Balance Due</span>
-                        <span class="cost-value" style="color: <?php echo $balance_due_with_tax > 0 ? 'var(--highlight)' : 'var(--success)'; ?>;">
-                            ₹<?php echo number_format($balance_due_with_tax, 2); ?>
+                        <span class="cost-value" style="color: <?php echo $balance_due > 0.01 ? 'var(--highlight)' : 'var(--success)'; ?>;">
+                            ₹<?php echo number_format($balance_due, 2); ?>
                         </span>
                     </div>
                 </div>
@@ -1067,31 +1193,34 @@ try {
                         </span>
                     </div>
                     
-                    <?php if (!empty($booking['payment_method'])): ?>
+                    <?php if (!empty($booking['payment_methods'])): ?>
                     <div class="info-item">
-                        <span class="info-label">Payment Method</span>
+                        <span class="info-label">Payment Method(s)</span>
                         <span class="info-value">
                             <i class="fas fa-wallet"></i>
                             <?php 
-                            $method = $booking['payment_method'];
+                            $methods = explode(', ', $booking['payment_methods']);
                             $method_names = [
-                                'card' => 'Credit/Debit Card',
-                                'upi' => 'UPI Payment',
+                                'card' => 'Card',
+                                'upi' => 'UPI',
                                 'gcash' => 'G-Cash',
                                 'paymaya' => 'PayMaya',
                                 'paypal' => 'PayPal',
                                 'bank_transfer' => 'Bank Transfer',
-                                'cash' => 'Cash Payment'
+                                'cash' => 'Cash'
                             ];
-                            echo $method_names[$method] ?? ucfirst(str_replace('_', ' ', $method));
+                            $display_methods = array_map(function($m) use ($method_names) {
+                                return $method_names[trim($m)] ?? ucfirst(str_replace('_', ' ', trim($m)));
+                            }, $methods);
+                            echo implode(', ', $display_methods);
                             ?>
                         </span>
                     </div>
                     <?php endif; ?>
                     
-                    <?php if (!empty($booking['payment_date'])): ?>
+                    <?php if (!empty($booking['last_payment_date'])): ?>
                     <div class="info-item">
-                        <span class="info-label">Payment Date</span>
+                        <span class="info-label">Last Payment Date</span>
                         <span class="info-value">
                             <i class="fas fa-calendar-check"></i>
                             <?php echo $payment_date_formatted; ?>
@@ -1100,10 +1229,10 @@ try {
                     <?php endif; ?>
                     
                     <div class="info-item">
-                        <span class="info-label">Payment Amount</span>
+                        <span class="info-label">Total Amount Paid</span>
                         <span class="info-value">
                             <i class="fas fa-rupee-sign"></i>
-                            ₹<?php echo number_format($deposit_amount, 2); ?>
+                            ₹<?php echo number_format($amount_paid, 2); ?>
                         </span>
                     </div>
                 </div>
@@ -1154,18 +1283,28 @@ try {
                     </div>
                     <?php endif; ?>
                     
-                    <?php if ($deposit_amount > 0): ?>
+                    <?php if ($amount_paid > 0): ?>
                     <div class="timeline-item">
                         <div class="timeline-time">
-                            <?php echo !empty($booking['payment_date']) ? $payment_date_formatted : date('F d, Y g:i A', strtotime($booking['updated_at'] ?? $booking['created_at'] ?? 'now')); ?>
+                            <?php echo !empty($booking['last_payment_date']) ? $payment_date_formatted : date('F d, Y g:i A', strtotime($booking['updated_at'] ?? $booking['created_at'] ?? 'now')); ?>
                         </div>
                         <div class="timeline-event">Payment Received</div>
                         <div class="timeline-desc">
-                            ₹<?php echo number_format($deposit_amount, 2); ?> paid
-                            <?php if (!empty($booking['payment_method'])): ?>
-                            via <?php echo ucfirst(str_replace('_', ' ', $booking['payment_method'])); ?>
+                            ₹<?php echo number_format($amount_paid, 2); ?> paid
+                            <?php if (!empty($booking['payment_methods'])): ?>
+                            via <?php echo str_replace(',', ' &', $booking['payment_methods']); ?>
                             <?php endif; ?>
                         </div>
+                    </div>
+                    <?php endif; ?>
+                    
+                    <?php if ($booking['status'] == 'cancelled'): ?>
+                    <div class="timeline-item">
+                        <div class="timeline-time">
+                            <?php echo date('F d, Y g:i A', strtotime($booking['updated_at'] ?? 'now')); ?>
+                        </div>
+                        <div class="timeline-event">Booking Cancelled</div>
+                        <div class="timeline-desc">This booking has been cancelled</div>
                     </div>
                     <?php endif; ?>
                 </div>

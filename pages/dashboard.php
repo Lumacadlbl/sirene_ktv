@@ -11,7 +11,10 @@ header("Expires: 0");
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.php");
+    exit;
+}
 
 // Helper function to get currency from country code
 function getCurrencyFromCountry($country_code) {
@@ -1431,7 +1434,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     </a>
                     <?php if (!empty($active_bookings)): ?>
                     <a href="food-order.php" class="banner-btn banner-btn-secondary">
-                        <i class="fas fa-utensils"></i> Order Food Now
+                        <i class="fas fa-utensils"></i> Pre Order Food Now
                     </a>
                     <?php endif; ?>
                 </div>

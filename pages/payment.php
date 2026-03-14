@@ -50,17 +50,10 @@ if ($check_store_payment->num_rows == 0) {
     $conn->query("ALTER TABLE booking ADD COLUMN store_payment_id VARCHAR(100) NULL AFTER paymongo_payment_id");
 }
 
-// Check if payment_id column exists in booking_food
-$check_food_payment = $conn->query("SHOW COLUMNS FROM booking_food LIKE 'payment_id'");
+// Check if payment_id column exists in preorders
+$check_food_payment = $conn->query("SHOW COLUMNS FROM preorders LIKE 'payment_id'");
 if ($check_food_payment->num_rows == 0) {
-    $conn->query("ALTER TABLE booking_food ADD COLUMN payment_id VARCHAR(100) NULL AFTER served");
-}
-
-// Check if f_id column exists in payments table and add it if not
-$check_payments_f_id = $conn->query("SHOW COLUMNS FROM payments LIKE 'f_id'");
-if ($check_payments_f_id->num_rows == 0) {
-    $conn->query("ALTER TABLE payments ADD COLUMN f_id INT NULL AFTER b_id, ADD FOREIGN KEY (f_id) REFERENCES food_beverages(f_id) ON DELETE SET NULL");
-    error_log("Added f_id column to payments table");
+    $conn->query("ALTER TABLE preorders ADD COLUMN payment_id VARCHAR(100) NULL AFTER status");
 }
 
 // Fetch booking details
@@ -91,19 +84,19 @@ if ($payment_type != 'food_only' && ($booking['payment_status'] == 'paid' || $bo
     exit;
 }
 
-// Fetch UNPAID food items (items that don't have a payment_id)
+// Fetch UNPAID preorder items (items that don't have a payment_id)
 $food_query = $conn->prepare("
     SELECT 
-        bf.*,
+        po.*,
         fb.item_name,
         fb.category,
         fb.f_id
-    FROM booking_food bf
-    JOIN food_beverages fb ON bf.f_id = fb.f_id
-    WHERE bf.b_id = ? 
-    AND bf.served != 'cancelled' 
-    AND (bf.payment_id IS NULL OR bf.payment_id = '')
-    ORDER BY bf.bf_id DESC
+    FROM preorders po
+    JOIN food_beverages fb ON po.f_id = fb.f_id
+    WHERE po.b_id = ? 
+    AND po.status != 'cancelled' 
+    AND (po.payment_id IS NULL OR po.payment_id = '')
+    ORDER BY po.po_id DESC
 ");
 
 $food_query->bind_param("i", $booking_id);
@@ -111,7 +104,7 @@ $food_query->execute();
 $food_result = $food_query->get_result();
 $unpaid_food_items = $food_result->fetch_all(MYSQLI_ASSOC);
 
-error_log("Found " . count($unpaid_food_items) . " unpaid food items");
+error_log("Found " . count($unpaid_food_items) . " unpaid preorder items");
 
 // Calculate duration
 $start = new DateTime($booking['start_time']);
@@ -122,24 +115,24 @@ $hours = $interval->h + ($interval->i / 60);
 // Calculate totals based on payment type
 $room_total = $booking['total_amount'];
 $unpaid_food_total = 0;
-$unpaid_food_ids = []; // Store f_ids for unpaid items
+$unpaid_food_ids = []; // Store po_ids for unpaid items
 foreach ($unpaid_food_items as $item) {
     $unpaid_food_total += ($item['price'] * $item['quantity']);
-    $unpaid_food_ids[] = $item['f_id']; // Collect f_ids for reference
+    $unpaid_food_ids[] = $item['po_id']; // Collect po_ids for reference
 }
 
-// Also fetch previously paid food items for display
+// Also fetch previously paid preorder items for display
 $paid_food_query = $conn->prepare("
     SELECT 
-        bf.*,
+        po.*,
         fb.item_name,
         fb.category
-    FROM booking_food bf
-    JOIN food_beverages fb ON bf.f_id = fb.f_id
-    WHERE bf.b_id = ? 
-    AND bf.payment_id IS NOT NULL 
-    AND bf.payment_id != ''
-    ORDER BY bf.bf_id DESC
+    FROM preorders po
+    JOIN food_beverages fb ON po.f_id = fb.f_id
+    WHERE po.b_id = ? 
+    AND po.payment_id IS NOT NULL 
+    AND po.payment_id != ''
+    ORDER BY po.po_id DESC
 ");
 
 $paid_food_query->bind_param("i", $booking_id);
@@ -153,12 +146,12 @@ if ($payment_type == 'food_only') {
     $downpayment = 0;
     $remaining = 0;
     $is_food_only = true;
-    $payment_description = "Food Order - Booking #" . str_pad($booking_id, 6, '0', STR_PAD_LEFT);
+    $payment_description = "Food Pre-Order - Booking #" . str_pad($booking_id, 6, '0', STR_PAD_LEFT);
     
     // If no unpaid food items, show message
     if ($unpaid_food_total <= 0) {
-        $no_food_error = "No unpaid food items to pay for.";
-        error_log("No unpaid food items for booking: $booking_id");
+        $no_food_error = "No unpaid pre-order items to pay for.";
+        error_log("No unpaid preorder items for booking: $booking_id");
     }
 } else {
     // For full payment, charge room + all unpaid food
@@ -234,8 +227,8 @@ function createPayMongoCheckout($amount, $description, $booking_id, $user_id, $p
         $f_ids = []; // Store food_beverages f_ids
         foreach ($unpaid_food_items as $index => $item) {
             $food_list[] = $item['item_name'] . ' (x' . $item['quantity'] . ')';
-            if ($item['bf_id']) {
-                $food_ids[] = $item['bf_id'];
+            if ($item['po_id']) {
+                $food_ids[] = $item['po_id'];
             }
             if ($item['f_id']) {
                 $f_ids[] = $item['f_id']; // Collect f_ids from food_beverages table
@@ -302,7 +295,7 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) 
     // Determine amount to pay based on payment type
     if ($is_food_only) {
         $amount_to_pay = $unpaid_food_total;
-        $final_description = "Food Order - Booking #" . str_pad($booking_id, 6, '0', STR_PAD_LEFT);
+        $final_description = "Food Pre-Order - Booking #" . str_pad($booking_id, 6, '0', STR_PAD_LEFT);
     } else {
         $amount_to_pay = ($payment_method == 'store') ? $downpayment : $grand_total;
         $final_description = "Booking #" . str_pad($booking_id, 6, '0', STR_PAD_LEFT) . " - " . $booking['room_name'];
@@ -322,41 +315,43 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) 
             
             if ($is_food_only) {
                 // For food-only store payment
-                // Update booking_food records with a store payment identifier
+                // Update preorders records with a store payment identifier
                 $store_payment_id = 'STORE_' . uniqid() . '_' . date('YmdHis');
                 
-                $update = $conn->prepare("UPDATE booking_food SET payment_id = ? WHERE b_id = ? AND (payment_id IS NULL OR payment_id = '')");
+                $update = $conn->prepare("UPDATE preorders SET payment_id = ? WHERE b_id = ? AND (payment_id IS NULL OR payment_id = '')");
                 $update->bind_param("si", $store_payment_id, $booking_id);
                 $update->execute();
                 $updated_count = $update->affected_rows;
-                error_log("Updated $updated_count food items with store payment ID: $store_payment_id");
+                error_log("Updated $updated_count preorder items with store payment ID: $store_payment_id");
                 
                 // Update booking to track store payment
                 $update_booking = $conn->prepare("UPDATE booking SET store_payment_id = ? WHERE b_id = ?");
                 $update_booking->bind_param("si", $store_payment_id, $booking_id);
                 $update_booking->execute();
                 
-                // For food-only store payment, we need to create multiple payment records?
-                // Since each food item could have different f_id, but it's easier to create one payment record
-                // with the first food item's f_id or NULL if multiple items
-                $f_id_to_use = !empty($unpaid_food_items) ? $unpaid_food_items[0]['f_id'] : null;
-                
-                // Insert into payments table (single payment record for all food items)
+                // For food-only store payment, insert into payments table
+                // payments table has: p_id, b_id, u_id, payment_method, payment_status, amount, payment_date
                 $payment_insert = $conn->prepare("
-                    INSERT INTO payments (b_id, f_id, u_id, payment_method, payment_status, amount, payment_date) 
-                    VALUES (?, ?, ?, 'store', 'pending', ?, NOW())
+                    INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
+                    VALUES (?, ?, ?, ?, ?, NOW())
                 ");
-                $payment_insert->bind_param("iisd", $booking_id, $f_id_to_use, $user_id, $unpaid_food_total);
+                
+                if (!$payment_insert) {
+                    error_log("Payment insert prepare failed: " . $conn->error);
+                    throw new Exception("Payment insert prepare failed");
+                }
+                
+                $payment_method_value = 'store';
+                $payment_status_value = 'pending';
+                $payment_insert->bind_param("iissd", 
+                    $booking_id,           // b_id - integer
+                    $user_id,              // u_id - integer
+                    $payment_method_value, // payment_method - string
+                    $payment_status_value, // payment_status - string
+                    $unpaid_food_total     // amount - decimal
+                );
                 $payment_insert->execute();
                 $payment_id = $conn->insert_id;
-                
-                // If there are multiple food items, we could update the payment_id in booking_food
-                // to link back to this payment record
-                if ($payment_id) {
-                    $link_foods = $conn->prepare("UPDATE booking_food SET payment_id = ? WHERE b_id = ? AND (payment_id IS NULL OR payment_id = '')");
-                    $link_foods->bind_param("si", $payment_id, $booking_id);
-                    $link_foods->execute();
-                }
                 
                 $conn->commit();
                 
@@ -370,12 +365,26 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) 
                 $update->bind_param("di", $downpayment, $booking_id);
                 $update->execute();
                 
-                // For full payment, f_id is NULL since this is for the room booking
+                // For full payment store payment, insert into payments table
                 $payment_insert = $conn->prepare("
-                    INSERT INTO payments (b_id, f_id, u_id, payment_method, payment_status, amount, payment_date) 
-                    VALUES (?, NULL, ?, 'store', 'pending', ?, NOW())
+                    INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
+                    VALUES (?, ?, ?, ?, ?, NOW())
                 ");
-                $payment_insert->bind_param("iid", $booking_id, $user_id, $downpayment);
+                
+                if (!$payment_insert) {
+                    error_log("Payment insert prepare failed: " . $conn->error);
+                    throw new Exception("Payment insert prepare failed");
+                }
+                
+                $payment_method_value = 'store';
+                $payment_status_value = 'pending';
+                $payment_insert->bind_param("iissd", 
+                    $booking_id,           // b_id - integer
+                    $user_id,              // u_id - integer
+                    $payment_method_value, // payment_method - string
+                    $payment_status_value, // payment_status - string
+                    $downpayment           // amount - decimal
+                );
                 $payment_insert->execute();
                 
                 $conn->commit();
@@ -429,12 +438,12 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) 
             
             try {
                 if ($is_food_only) {
-                    // For food-only payment, store payment ID in booking_food records for unpaid items
-                    $update = $conn->prepare("UPDATE booking_food SET payment_id = ? WHERE b_id = ? AND (payment_id IS NULL OR payment_id = '')");
+                    // For food-only payment, store payment ID in preorders records for unpaid items
+                    $update = $conn->prepare("UPDATE preorders SET payment_id = ? WHERE b_id = ? AND (payment_id IS NULL OR payment_id = '')");
                     $update->bind_param("si", $session_id, $booking_id);
                     $update->execute();
                     $updated_count = $update->affected_rows;
-                    error_log("Updated $updated_count food items with payment_id: $session_id");
+                    error_log("Updated $updated_count preorder items with payment_id: $session_id");
                     
                     // Also update booking table to track the payment
                     $update_booking = $conn->prepare("UPDATE booking SET paymongo_payment_id = ? WHERE b_id = ?");
@@ -448,16 +457,25 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) 
                         $update_status->execute();
                     }
                     
-                    // For food-only payment, we need to determine which f_id to use
-                    // Since this could be multiple food items, we'll use the first one's f_id or NULL
-                    $f_id_to_use = !empty($unpaid_food_items) ? $unpaid_food_items[0]['f_id'] : null;
-                    
-                    // Insert into payments table
+                    // Insert into payments table for food-only payment
                     $payment_insert = $conn->prepare("
-                        INSERT INTO payments (b_id, f_id, u_id, payment_method, payment_status, amount, payment_date) 
-                        VALUES (?, ?, ?, 'pending', ?, NOW())
+                        INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
+                        VALUES (?, ?, ?, ?, ?, NOW())
                     ");
-                    $payment_insert->bind_param("iisd", $booking_id, $f_id_to_use, $user_id, $payment_method, $amount_to_pay);
+                    
+                    if (!$payment_insert) {
+                        error_log("Payment insert prepare failed: " . $conn->error);
+                        throw new Exception("Payment insert prepare failed");
+                    }
+                    
+                    $payment_status_value = 'pending';
+                    $payment_insert->bind_param("iissd", 
+                        $booking_id,           // b_id - integer
+                        $user_id,              // u_id - integer
+                        $payment_method,       // payment_method - string
+                        $payment_status_value, // payment_status - string
+                        $amount_to_pay         // amount - decimal
+                    );
                     $payment_insert->execute();
                     
                 } else {
@@ -466,12 +484,25 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['pay_with_paymongo'])) 
                     $update->bind_param("si", $session_id, $booking_id);
                     $update->execute();
                     
-                    // For full payment, f_id is NULL since this includes room booking
+                    // For full payment, insert into payments table
                     $payment_insert = $conn->prepare("
-                        INSERT INTO payments (b_id, f_id, u_id, payment_method, payment_status, amount, payment_date) 
-                        VALUES (?, NULL, ?, ?, 'pending', ?, NOW())
+                        INSERT INTO payments (b_id, u_id, payment_method, payment_status, amount, payment_date) 
+                        VALUES (?, ?, ?, ?, ?, NOW())
                     ");
-                    $payment_insert->bind_param("iisd", $booking_id, $user_id, $payment_method, $amount_to_pay);
+                    
+                    if (!$payment_insert) {
+                        error_log("Payment insert prepare failed: " . $conn->error);
+                        throw new Exception("Payment insert prepare failed");
+                    }
+                    
+                    $payment_status_value = 'pending';
+                    $payment_insert->bind_param("iissd", 
+                        $booking_id,           // b_id - integer
+                        $user_id,              // u_id - integer
+                        $payment_method,       // payment_method - string
+                        $payment_status_value, // payment_status - string
+                        $amount_to_pay         // amount - decimal
+                    );
                     $payment_insert->execute();
                 }
                 
@@ -515,7 +546,7 @@ if (isset($error)) {
 if (isset($no_food_error)) {
     echo "<div style='background: rgba(253, 203, 110, 0.2); border: 2px solid #fdcb6e; border-radius: 20px; padding: 50px; margin: 50px auto; max-width: 600px; color: #fdcb6e; text-align: center;'>";
     echo "<i class='fas fa-utensils' style='font-size: 70px; margin-bottom: 25px;'></i>";
-    echo "<h3 style='margin-bottom: 20px; font-size: 28px;'>No Unpaid Food Items</h3>";
+    echo "<h3 style='margin-bottom: 20px; font-size: 28px;'>No Unpaid Pre-Order Items</h3>";
     echo "<p style='margin-bottom: 35px; font-size: 16px; line-height: 1.6;'>" . $no_food_error . "</p>";
     echo "<a href='my-bookings.php' style='display: inline-block; padding: 15px 45px; background: linear-gradient(135deg, #fdcb6e, #e8a822); color: #333; text-decoration: none; border-radius: 10px; font-weight: bold; font-size: 16px;'>Back to Bookings</a>";
     echo "</div>";
@@ -1539,7 +1570,7 @@ if (isset($no_food_error)) {
                 <?php if (!empty($unpaid_food_items)): ?>
                 <div class="modal-food-items">
                     <div class="modal-food-title">
-                        <i class="fas fa-utensils"></i> Unpaid Food Items
+                        <i class="fas fa-utensils"></i> Unpaid Pre-Order Items
                     </div>
                     <?php foreach ($unpaid_food_items as $item): ?>
                     <div class="modal-food-item">
@@ -1589,12 +1620,12 @@ if (isset($no_food_error)) {
                 <?php endif; ?>
                 <div class="modal-detail-item">
                     <span class="modal-detail-label">Total Amount:</span>
-                    <span class="modal-detail-value">₱<?php echo number_format($grand_total, 2); ?></span>
+                    <span class="modal-detail-value">₱<?php echo number_format($is_food_only ? $unpaid_food_total : $grand_total, 2); ?></span>
                 </div>
                 <?php if (!empty($unpaid_food_items)): ?>
                 <div class="modal-food-items">
                     <div class="modal-food-title">
-                        <i class="fas fa-utensils"></i> Unpaid Food Items
+                        <i class="fas fa-utensils"></i> Unpaid Pre-Order Items
                     </div>
                     <?php foreach ($unpaid_food_items as $item): ?>
                     <div class="modal-food-item">
@@ -1644,12 +1675,12 @@ if (isset($no_food_error)) {
                 <?php endif; ?>
                 <div class="modal-detail-item">
                     <span class="modal-detail-label">Total Amount:</span>
-                    <span class="modal-detail-value">₱<?php echo number_format($grand_total, 2); ?></span>
+                    <span class="modal-detail-value">₱<?php echo number_format($is_food_only ? $unpaid_food_total : $grand_total, 2); ?></span>
                 </div>
                 <?php if (!empty($unpaid_food_items)): ?>
                 <div class="modal-food-items">
                     <div class="modal-food-title">
-                        <i class="fas fa-utensils"></i> Unpaid Food Items
+                        <i class="fas fa-utensils"></i> Unpaid Pre-Order Items
                     </div>
                     <?php foreach ($unpaid_food_items as $item): ?>
                     <div class="modal-food-item">
@@ -1699,12 +1730,12 @@ if (isset($no_food_error)) {
                 <?php endif; ?>
                 <div class="modal-detail-item">
                     <span class="modal-detail-label">Total Amount:</span>
-                    <span class="modal-detail-value">₱<?php echo number_format($grand_total, 2); ?></span>
+                    <span class="modal-detail-value">₱<?php echo number_format($is_food_only ? $unpaid_food_total : $grand_total, 2); ?></span>
                 </div>
                 <?php if (!empty($unpaid_food_items)): ?>
                 <div class="modal-food-items">
                     <div class="modal-food-title">
-                        <i class="fas fa-utensils"></i> Unpaid Food Items
+                        <i class="fas fa-utensils"></i> Unpaid Pre-Order Items
                     </div>
                     <?php foreach ($unpaid_food_items as $item): ?>
                     <div class="modal-food-item">
@@ -1757,8 +1788,8 @@ if (isset($no_food_error)) {
         <div class="payment-type-banner">
             <i class="<?php echo $is_food_only ? 'fas fa-utensils' : 'fas fa-check-circle'; ?>"></i>
             <div class="banner-content">
-                <h3><i class="fas fa-shield-alt"></i> <?php echo $is_food_only ? 'FOOD PAYMENT' : 'SECURE PAYMENT'; ?></h3>
-                <p><?php echo $is_food_only ? 'You are paying for your unpaid food items. Previously paid items are shown below for reference.' : 'Payments are processed securely by PayMongo. We never store your card details.'; ?></p>
+                <h3><i class="fas fa-shield-alt"></i> <?php echo $is_food_only ? 'FOOD PRE-ORDER PAYMENT' : 'SECURE PAYMENT'; ?></h3>
+                <p><?php echo $is_food_only ? 'You are paying for your unpaid pre-order items. Previously paid items are shown below for reference.' : 'Payments are processed securely by PayMongo. We never store your card details.'; ?></p>
             </div>
         </div>
 
@@ -1834,7 +1865,7 @@ if (isset($no_food_error)) {
             <div class="food-items-panel">
                 <div class="food-items-title">
                     <i class="fas fa-utensils"></i>
-                    <span>Unpaid Food Items (<?php echo count($unpaid_food_items); ?> items)</span>
+                    <span>Unpaid Pre-Order Items (<?php echo count($unpaid_food_items); ?> items)</span>
                 </div>
                 <?php foreach ($unpaid_food_items as $item): ?>
                 <div class="food-item-row">
@@ -1854,7 +1885,7 @@ if (isset($no_food_error)) {
             <div class="paid-items-panel">
                 <div class="paid-items-title">
                     <i class="fas fa-check-circle"></i>
-                    <span>Previously Paid Food Items (<?php echo count($paid_food_items); ?> items)</span>
+                    <span>Previously Paid Pre-Order Items (<?php echo count($paid_food_items); ?> items)</span>
                 </div>
                 <?php foreach ($paid_food_items as $item): ?>
                 <div class="paid-item-row">
@@ -2049,7 +2080,7 @@ if (isset($no_food_error)) {
     // Debug - log when page loads
     document.addEventListener('DOMContentLoaded', function() {
         console.log('Payment page loaded - Booking ID: <?php echo $booking_id; ?>, Type: <?php echo $payment_type; ?>');
-        console.log('Unpaid food items: <?php echo count($unpaid_food_items); ?>');
+        console.log('Unpaid pre-order items: <?php echo count($unpaid_food_items); ?>');
     });
     </script>
 </body>

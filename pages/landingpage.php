@@ -15,6 +15,8 @@
             --dark: #0d1117;
             --gradient-start: #1a1a2e;
             --gradient-end: #16213e;
+            --tablet: #3498db;
+            --tablet-hover: #5faee3;
         }
 
         * {
@@ -201,6 +203,62 @@
             border: 2px solid var(--highlight);
         }
 
+        /* Tablet Order Button - New Stylish Button */
+        .btn-tablet {
+            background: linear-gradient(135deg, var(--tablet), #5faee3);
+            color: white;
+            margin-bottom: 5px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn-tablet::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.3) 0%, transparent 70%);
+            opacity: 0;
+            transition: opacity 0.3s;
+            transform: rotate(45deg);
+        }
+
+        .btn-tablet:hover::before {
+            opacity: 1;
+        }
+
+        .btn-tablet i {
+            font-size: 18px;
+            animation: pulse-icon 2s infinite;
+        }
+
+        @keyframes pulse-icon {
+            0%, 100% {
+                transform: scale(1);
+            }
+            50% {
+                transform: scale(1.1);
+            }
+        }
+
+        /* Divider with "or" text */
+        .divider {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin: 20px 0;
+            color: rgba(255, 255, 255, 0.4);
+            font-size: 14px;
+        }
+
+        .divider-line {
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+        }
+
         .btn:hover {
             transform: translateY(-3px);
             box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
@@ -213,6 +271,25 @@
 
         .btn-register:hover {
             background: rgba(233, 69, 96, 0.1);
+        }
+
+        /* Tablet Order Badge */
+        .tablet-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(52, 152, 219, 0.15);
+            padding: 8px 16px;
+            border-radius: 50px;
+            margin-bottom: 20px;
+            border: 1px solid rgba(52, 152, 219, 0.3);
+            color: var(--tablet);
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .tablet-badge i {
+            font-size: 14px;
         }
 
         /* Decorative Elements */
@@ -237,6 +314,28 @@
             bottom: -30px;
             left: -30px;
             border-radius: 50%;
+        }
+
+        /* Tablet Decoration */
+        .decoration-tablet {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            background: radial-gradient(circle, rgba(52, 152, 219, 0.15) 0%, transparent 70%);
+            border-radius: 50%;
+            z-index: -1;
+            animation: rotate 10s linear infinite;
+        }
+
+        @keyframes rotate {
+            from {
+                transform: rotate(0deg);
+            }
+            to {
+                transform: rotate(360deg);
+            }
         }
 
         /* Features Section */
@@ -275,6 +374,35 @@
             font-size: 12px;
         }
 
+        /* Quick Order Hint */
+        .quick-order-hint {
+            margin-top: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            color: rgba(52, 152, 219, 0.8);
+            font-size: 13px;
+            background: rgba(52, 152, 219, 0.05);
+            padding: 10px;
+            border-radius: 50px;
+            border: 1px dashed rgba(52, 152, 219, 0.3);
+        }
+
+        .quick-order-hint i {
+            font-size: 16px;
+            animation: bounce 1s infinite;
+        }
+
+        @keyframes bounce {
+            0%, 100% {
+                transform: translateX(0);
+            }
+            50% {
+                transform: translateX(5px);
+            }
+        }
+
         /* Responsive Design */
         @media (max-width: 768px) {
             .welcome-card {
@@ -308,6 +436,11 @@
             .btn {
                 padding: 14px 20px;
                 font-size: 14px;
+            }
+
+            .tablet-badge {
+                font-size: 12px;
+                padding: 6px 12px;
             }
         }
 
@@ -359,6 +492,28 @@
                 opacity: 0;
             }
         }
+
+        /* Tablet Wave Animation */
+        .tablet-wave {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(90deg, transparent, var(--tablet), transparent);
+            animation: wave 2s ease-in-out infinite;
+        }
+
+        @keyframes wave {
+            0%, 100% {
+                transform: scaleX(0.5);
+                opacity: 0.3;
+            }
+            50% {
+                transform: scaleX(1);
+                opacity: 0.8;
+            }
+        }
     </style>
 </head>
 <body>
@@ -371,6 +526,13 @@
         <!-- Decorative Elements -->
         <div class="decoration decoration-1"></div>
         <div class="decoration decoration-2"></div>
+        <div class="decoration-tablet"></div>
+
+        <!-- Tablet Badge - Subtle indicator -->
+        <div class="tablet-badge">
+            <i class="fas fa-tablet-alt"></i>
+            <span>Quick Order Available</span>
+        </div>
 
         <!-- Logo and Header -->
         <div class="logo">
@@ -395,6 +557,26 @@
             <input type="text" id="welcome-text" value="Experience Premium Karaoke Like Never Before" readonly>
         </div>
 
+        <!-- Tablet Order Button - Prominently placed but elegant -->
+        <a href="tablet.php" class="btn btn-tablet">
+            <i class="fas fa-tablet-alt"></i> Order Now via Tablet
+            <i class="fas fa-arrow-right"></i>
+        </a>
+
+        <!-- Quick Order Hint -->
+        <div class="quick-order-hint">
+            <i class="fas fa-bolt"></i>
+            <span>No login required • Instant ordering</span>
+            <i class="fas fa-clock"></i>
+        </div>
+
+        <!-- Divider with "or" -->
+        <div class="divider">
+            <div class="divider-line"></div>
+            <span>or continue with account</span>
+            <div class="divider-line"></div>
+        </div>
+
         <!-- Action Buttons -->
         <div class="btn-container">
             <a href="login.php" class="btn btn-login">
@@ -404,6 +586,9 @@
                 <i class="fas fa-user-plus"></i> Create New Account
             </a>
         </div>
+
+        <!-- Tablet Wave Animation -->
+        <div class="tablet-wave"></div>
 
         <!-- Features -->
         <div class="features">
@@ -452,7 +637,8 @@
             "Where Every Voice Matters",
             "Unleash Your Inner Star",
             "Premium Sound, Unforgettable Moments",
-            "Book Your Perfect Room Today"
+            "Book Your Perfect Room Today",
+            "Order Food & Drinks Instantly"
         ];
 
         let currentIndex = 0;
@@ -464,6 +650,17 @@
                 welcomeInput.style.opacity = '1';
             }, 300);
         }, 3000);
+
+        // Add hover effect to tablet button
+        const tabletBtn = document.querySelector('.btn-tablet');
+        if (tabletBtn) {
+            tabletBtn.addEventListener('mouseenter', function() {
+                this.style.animation = 'pulse 1s';
+            });
+            tabletBtn.addEventListener('mouseleave', function() {
+                this.style.animation = 'none';
+            });
+        }
     });
 </script>
 
