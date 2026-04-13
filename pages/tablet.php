@@ -1386,14 +1386,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         
         <div class="table-selector">
             <select id="tableSelector" onchange="switchTable(this.value)">
-                <option value="1">Table 1</option>
-                <option value="2">Table 2</option>
-                <option value="3">Table 3</option>
-                <option value="4">Table 4</option>
-                <option value="5">Table 5</option>
-                <option value="6">Table 6</option>
-                <option value="7">Table 7</option>
-                <option value="8">Table 8</option>
+                <option value="1">SSVIP</option>
             </select>
         </div>
     </div>

@@ -96,7 +96,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $booking_date = $_POST['booking_date'];
     $start_time = $_POST['start_time'];
     $end_time = $_POST['end_time'];
-    // Notes is received but NOT saved to database
     $notes = $_POST['notes'] ?? ''; // Just for reference, not used in DB
     
     // Validate date format
@@ -121,81 +120,124 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif ($hours > 6) {
             $error = "Maximum booking duration is 6 hours";
         } else {
-            // Check if room is available for this time slot
-            $check_query = $conn->prepare("
-                SELECT * FROM booking 
-                WHERE r_id = ? 
-                AND booking_date = ?
-                AND status IN ('confirmed', 'pending')
-                AND (
-                    (start_time <= ? AND end_time > ?)
-                    OR (start_time < ? AND end_time >= ?)
-                    OR (? <= start_time AND ? > start_time)
-                )
-            ");
-            $check_query->bind_param(
-                "isssssss",
-                $room_id,
-                $booking_date,
-                $start_time,
-                $start_time,
-                $end_time,
-                $end_time,
-                $start_time,
-                $end_time
-            );
-            $check_query->execute();
-            $check_result = $check_query->get_result();
+            // FIXED: Improved availability check - LOCK the table to prevent race conditions
+            $conn->begin_transaction();
             
-            if ($check_result->num_rows > 0) {
-                $conflict = $check_result->fetch_assoc();
-                $error = "Room is already booked from " . 
-                         date('g:i A', strtotime($conflict['start_time'])) . 
-                         " to " . date('g:i A', strtotime($conflict['end_time']));
-            } else {
-                // Calculate room amount
-                $room_amount = $room['price_hr'] * $hours;
+            try {
+                // Lock the booking table for this room and date to prevent concurrent bookings
+                $lock_query = $conn->prepare("
+                    SELECT GET_LOCK('booking_lock_${room_id}_${booking_date}', 5) as lock_acquired
+                ");
+                $lock_query->execute();
+                $lock_result = $lock_query->get_result();
+                $lock_row = $lock_result->fetch_assoc();
                 
-                // Calculate tax (10%)
-                $subtotal = $room_amount;
-                $tax_amount = $subtotal * 0.10;
-                $total_amount = $subtotal + $tax_amount;
+                if (!$lock_row['lock_acquired']) {
+                    throw new Exception("Could not acquire lock. Please try again.");
+                }
                 
-                // Insert booking with status = 'confirmed' (auto-approved)
-                $stmt = $conn->prepare("INSERT INTO booking (
-                    u_id, r_id, booking_date, start_time, end_time, hours, 
-                    room_amount, food_amount, subtotal, tax_amount, total_amount, 
-                    status, payment_status, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', 'pending', NOW())");
-
-                $food_amount = 0; // No food items initially
+                // FIXED: More robust availability check
+                $check_query = $conn->prepare("
+                    SELECT * FROM booking 
+                    WHERE r_id = ? 
+                    AND booking_date = ?
+                    AND status IN ('confirmed', 'pending')
+                    AND (
+                        -- Case 1: New booking starts during an existing booking
+                        (TIME(?) >= TIME(start_time) AND TIME(?) < TIME(end_time))
+                        OR
+                        -- Case 2: New booking ends during an existing booking
+                        (TIME(?) > TIME(start_time) AND TIME(?) <= TIME(end_time))
+                        OR
+                        -- Case 3: New booking completely contains an existing booking
+                        (TIME(?) <= TIME(start_time) AND TIME(?) >= TIME(end_time))
+                        OR
+                        -- Case 4: For overnight bookings, handle date boundary
+                        (
+                            TIME(end_time) < TIME(start_time) AND
+                            (
+                                TIME(?) >= TIME(start_time) OR
+                                TIME(?) <= TIME(end_time)
+                            )
+                        )
+                    )
+                ");
                 
-                // FIXED: Correct bind_param type string
-                // i = integer, s = string, d = double/decimal
-                $stmt->bind_param(
-                    "iisssdddddd", // i,i,s,s,s,d,d,d,d,d,d (11 characters)
-                    $user_id,      // i
-                    $room_id,      // i
-                    $booking_date, // s
-                    $start_time,   // s
-                    $end_time,     // s
-                    $hours,        // d (decimal)
-                    $room_amount,  // d
-                    $food_amount,  // d
-                    $subtotal,     // d
-                    $tax_amount,   // d
-                    $total_amount  // d
+                $check_query->bind_param(
+                    "isssssssss",
+                    $room_id,
+                    $booking_date,
+                    $start_time, $start_time,  // For case 1
+                    $end_time, $end_time,      // For case 2
+                    $start_time, $end_time,    // For case 3
+                    $start_time, $end_time     // For case 4
                 );
                 
-                if ($stmt->execute()) {
-                    $booking_id = $stmt->insert_id;
+                $check_query->execute();
+                $check_result = $check_query->get_result();
+                
+                if ($check_result->num_rows > 0) {
+                    $conflict = $check_result->fetch_assoc();
+                    $error = "Room is already booked from " . 
+                             date('g:i A', strtotime($conflict['start_time'])) . 
+                             " to " . date('g:i A', strtotime($conflict['end_time']));
                     
-                    $_SESSION['success'] = "Booking confirmed successfully! Your room is ready.";
-                    header("Location: booking-confirmation.php?booking_id=$booking_id");
-                    exit;
+                    // Release the lock
+                    $conn->query("SELECT RELEASE_LOCK('booking_lock_{$room_id}_{$booking_date}')");
+                    $conn->rollback();
                 } else {
-                    $error = "Failed to create booking. Please try again. Error: " . $conn->error;
+                    // Calculate room amount
+                    $room_amount = $room['price_hr'] * $hours;
+                    
+                    // Calculate tax (10%)
+                    $subtotal = $room_amount;
+                    $tax_amount = $subtotal * 0.10;
+                    $total_amount = $subtotal + $tax_amount;
+                    
+                    // Insert booking with status = 'confirmed' (auto-approved)
+                    $stmt = $conn->prepare("INSERT INTO booking (
+                        u_id, r_id, booking_date, start_time, end_time, hours, 
+                        room_amount, food_amount, subtotal, tax_amount, total_amount, 
+                        status, payment_status, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'confirmed', 'pending', NOW())");
+
+                    $food_amount = 0; // No food items initially
+                    
+                    $stmt->bind_param(
+                        "iisssdddddd",
+                        $user_id,
+                        $room_id,
+                        $booking_date,
+                        $start_time,
+                        $end_time,
+                        $hours,
+                        $room_amount,
+                        $food_amount,
+                        $subtotal,
+                        $tax_amount,
+                        $total_amount
+                    );
+                    
+                    if ($stmt->execute()) {
+                        $booking_id = $stmt->insert_id;
+                        
+                        // Release the lock
+                        $conn->query("SELECT RELEASE_LOCK('booking_lock_{$room_id}_{$booking_date}')");
+                        
+                        $conn->commit();
+                        
+                        $_SESSION['success'] = "Booking confirmed successfully! Your room is ready.";
+                        header("Location: booking-confirmation.php?booking_id=$booking_id");
+                        exit;
+                    } else {
+                        throw new Exception("Failed to create booking: " . $conn->error);
+                    }
                 }
+            } catch (Exception $e) {
+                // Release the lock if something went wrong
+                $conn->query("SELECT RELEASE_LOCK('booking_lock_{$room_id}_{$booking_date}')");
+                $conn->rollback();
+                $error = "Failed to create booking. Please try again. Error: " . $e->getMessage();
             }
         }
     }
@@ -998,26 +1040,29 @@ foreach ($existing_bookings as $booking) {
             const start = new Date(`1970-01-01T${startTime}`);
             const end = new Date(`1970-01-01T${endTime}`);
             
-            let isAvailable = true;
+            // Handle overnight for comparison
+            if (end < start) {
+                end.setDate(end.getDate() + 1);
+            }
             
             for (const booking of existingBookings[date]) {
                 const bookingStart = new Date(`1970-01-01T${booking.start}`);
                 const bookingEnd = new Date(`1970-01-01T${booking.end}`);
                 
-                // Check for overlap
+                // Handle overnight for existing booking
+                if (bookingEnd < bookingStart) {
+                    bookingEnd.setDate(bookingEnd.getDate() + 1);
+                }
+                
+                // Check for any overlap
                 if ((start >= bookingStart && start < bookingEnd) ||
                     (end > bookingStart && end <= bookingEnd) ||
                     (start <= bookingStart && end >= bookingEnd)) {
-                    isAvailable = false;
-                    break;
+                    availabilityDiv.className = 'availability-status unavailable';
+                    availabilityDiv.innerHTML = `<i class="fas fa-times-circle"></i> This time slot is already booked. Please choose a different time.`;
+                    submitBtn.disabled = true;
+                    return false;
                 }
-            }
-            
-            if (!isAvailable) {
-                availabilityDiv.className = 'availability-status unavailable';
-                availabilityDiv.innerHTML = `<i class="fas fa-times-circle"></i> This time slot is already booked. Please choose a different time.`;
-                submitBtn.disabled = true;
-                return false;
             }
         }
         
@@ -1076,6 +1121,9 @@ foreach ($existing_bookings as $booking) {
         const submitBtn = document.getElementById('submitBtn');
         submitBtn.disabled = true;
         submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing Your Booking...';
+        
+        // Add a small delay to ensure the lock is acquired
+        return true;
     });
 
     // Log that page loaded successfully

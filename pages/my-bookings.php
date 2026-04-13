@@ -11,7 +11,7 @@ $user_id = $_SESSION['user_id'];
 $name = $_SESSION['name'] ?? 'User';
 $role = $_SESSION['role'] ?? 'user';
 
-// Fetch user's room bookings
+// Fetch user's room bookings - EXCLUDE CANCELLED bookings
 $room_bookings_query = $conn->prepare("
     SELECT b.*, r.room_name, r.capcity, r.price_hr,
            b.status as booking_status,
@@ -23,7 +23,7 @@ $room_bookings_query = $conn->prepare("
     FROM booking b 
     JOIN room r ON b.r_id = r.r_id 
     LEFT JOIN payments p ON b.b_id = p.b_id
-    WHERE b.u_id = ?
+    WHERE b.u_id = ? AND b.status != 'cancelled'
     ORDER BY b.booking_date DESC, b.start_time DESC
 ");
 
@@ -36,7 +36,7 @@ $room_bookings_query->execute();
 $room_bookings_result = $room_bookings_query->get_result();
 $room_bookings = $room_bookings_result->fetch_all(MYSQLI_ASSOC);
 
-// Fetch user's pre-orders with booking details from preorders table
+// Fetch user's pre-orders with booking details from preorders table - EXCLUDE cancelled bookings
 $food_orders_query = $conn->prepare("
     SELECT 
         po.*,
@@ -55,7 +55,7 @@ $food_orders_query = $conn->prepare("
     JOIN food_beverages fb ON po.f_id = fb.f_id
     JOIN booking b ON po.b_id = b.b_id
     JOIN room r ON b.r_id = r.r_id
-    WHERE b.u_id = ?
+    WHERE b.u_id = ? AND b.status != 'cancelled' AND po.status != 'cancelled'
     ORDER BY b.booking_date DESC, b.start_time DESC, po.po_id DESC
 ");
 
@@ -85,34 +85,45 @@ foreach ($food_orders as $order) {
         ];
     }
     
-    $food_orders_by_booking[$booking_id]['items'][] = $order;
-    $food_orders_by_booking[$booking_id]['total'] += ($order['price'] * $order['quantity']);
-    
-    // Check if any items are pending
-    if ($order['status'] == 'pending') {
-        $food_orders_by_booking[$booking_id]['has_pending_items'] = true;
-    }
-    
-    // Check if all items are prepared
-    if ($order['status'] != 'prepared') {
-        $food_orders_by_booking[$booking_id]['all_prepared'] = false;
+    // Only add non-cancelled items
+    if ($order['status'] != 'cancelled') {
+        $food_orders_by_booking[$booking_id]['items'][] = $order;
+        $food_orders_by_booking[$booking_id]['total'] += ($order['price'] * $order['quantity']);
+        
+        // Check if any items are pending
+        if ($order['status'] == 'pending') {
+            $food_orders_by_booking[$booking_id]['has_pending_items'] = true;
+        }
+        
+        // Check if all items are prepared
+        if ($order['status'] != 'prepared') {
+            $food_orders_by_booking[$booking_id]['all_prepared'] = false;
+        }
     }
 }
 
-// Calculate statistics
+// Remove bookings with no items after filtering cancelled ones
+$food_orders_by_booking = array_filter($food_orders_by_booking, function($booking) {
+    return count($booking['items']) > 0;
+});
+
+// Calculate statistics (only non-cancelled)
 $total_room_bookings = count($room_bookings);
-$total_food_orders = count($food_orders);
+$total_food_orders = 0;
 $total_food_spent = 0;
 $pending_food_orders = 0;
 $prepared_food_orders = 0;
 
 foreach ($food_orders as $order) {
-    $total_food_spent += ($order['price'] * $order['quantity']);
-    
-    if ($order['status'] == 'pending') {
-        $pending_food_orders++;
-    } elseif ($order['status'] == 'prepared') {
-        $prepared_food_orders++;
+    if ($order['status'] != 'cancelled') {
+        $total_food_orders++;
+        $total_food_spent += ($order['price'] * $order['quantity']);
+        
+        if ($order['status'] == 'pending') {
+            $pending_food_orders++;
+        } elseif ($order['status'] == 'prepared') {
+            $prepared_food_orders++;
+        }
     }
 }
 
@@ -1081,7 +1092,7 @@ function formatScheduledTime($scheduled_for) {
             </button>
             <button class="tab-btn" onclick="showTab('food-orders')">
                 <i class="fas fa-utensils"></i> Pre-Orders
-                <span class="badge"><?php echo count($food_orders); ?></span>
+                <span class="badge"><?php echo $total_food_orders; ?></span>
             </button>
         </div>
         
@@ -1121,6 +1132,7 @@ function formatScheduledTime($scheduled_for) {
                 <?php foreach ($room_bookings as $booking): 
                     $bookingStatus = strtolower($booking['booking_status'] ?? 'pending');
                     $paymentStatus = strtolower($booking['payment_status'] ?? 'pending');
+                    $isPaid = ($paymentStatus == 'paid');
                     
                     $status_text = 'Pending';
                     $status_class = 'status-pending';
@@ -1142,7 +1154,8 @@ function formatScheduledTime($scheduled_for) {
                         $status_class = 'status-confirmed';
                     }
                     
-                    $canCancel = ($bookingStatus == 'pending' || $bookingStatus == 'approved' || $bookingStatus == 'confirmed') && $bookingStatus != 'cancelled';
+                    // Only show cancel button if booking is NOT paid and can be cancelled
+                    $canCancel = !$isPaid && ($bookingStatus == 'pending' || $bookingStatus == 'approved' || $bookingStatus == 'confirmed') && $bookingStatus != 'cancelled';
                     $showPaymentBtn = ($paymentStatus == 'pending' || $paymentStatus == '') && $bookingStatus != 'cancelled' && $bookingStatus != 'rejected';
                 ?>
                     <div class="booking-card">
@@ -1207,7 +1220,7 @@ function formatScheduledTime($scheduled_for) {
                                 <i class="fas fa-eye"></i> Details
                             </a>
                             
-                            <?php if (isset($food_orders_by_booking[$booking['b_id']])): ?>
+                            <?php if (isset($food_orders_by_booking[$booking['b_id']]) && count($food_orders_by_booking[$booking['b_id']]['items']) > 0): ?>
                                 <a href="javascript:void(0)" onclick="showTab('food-orders')" class="action-btn action-teal">
                                     <i class="fas fa-utensils"></i> Pre-Orders (<?php echo count($food_orders_by_booking[$booking['b_id']]['items']); ?>)
                                 </a>
@@ -1233,7 +1246,7 @@ function formatScheduledTime($scheduled_for) {
         
         <!-- Food Orders Tab (Pre-Orders) -->
         <div id="food-orders" class="tab-content">
-            <?php if (!empty($food_orders)): ?>
+            <?php if (!empty($food_orders_by_booking)): ?>
                 <div class="stats-cards">
                     <div class="stat-card">
                         <div class="stat-icon"><i class="fas fa-utensils"></i></div>
