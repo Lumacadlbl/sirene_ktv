@@ -189,7 +189,6 @@ if ($balance_due <= 0.01) {
 $status_colors = [
     'confirmed' => '#00b894',
     'pending' => '#fdcb6e',
-    'cancelled' => '#d63031',
     'completed' => '#0984e3',
     'in-progress' => '#6c5ce7',
     'paid' => '#00b894',
@@ -481,18 +480,6 @@ error_log("Booking ID: $booking_id - Status: $payment_status, Balance: $balance_
             box-shadow: 0 8px 20px rgba(9, 132, 227, 0.3);
         }
 
-        .action-btn.cancel {
-            background: linear-gradient(135deg, var(--danger), #d63031);
-            color: white;
-            border: 1px solid rgba(214, 48, 49, 0.3);
-        }
-
-        .action-btn.cancel:hover {
-            background: linear-gradient(135deg, #d63031, var(--danger));
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(214, 48, 49, 0.3);
-        }
-
         .action-btn.edit {
             background: linear-gradient(135deg, var(--warning), #fdcb6e);
             color: #333;
@@ -678,10 +665,6 @@ error_log("Booking ID: $booking_id - Status: $payment_status, Balance: $balance_
             color: var(--success);
         }
 
-        .food-status.cancelled {
-            background: rgba(214, 48, 49, 0.15);
-            color: var(--danger);
-        }
 
         .cost-summary {
             background: rgba(9, 132, 227, 0.1);
@@ -991,11 +974,6 @@ error_log("Booking ID: $booking_id - Status: $payment_status, Balance: $balance_
             </a>
             <?php endif; ?>
             
-            <?php if ($can_cancel): ?>
-            <button class="action-btn cancel" onclick="cancelBooking()">
-                <i class="fas fa-times-circle"></i> Cancel Booking
-            </button>
-            <?php endif; ?>
             
             <?php if ($role == 'admin'): ?>
             <a href="admin/edit-booking.php?id=<?php echo $booking_id; ?>" class="action-btn edit">
@@ -1324,11 +1302,6 @@ error_log("Booking ID: $booking_id - Status: $payment_status, Balance: $balance_
 </footer>
 
 <script>
-    function cancelBooking() {
-        if (confirm('Are you sure you want to cancel this booking? This action cannot be undone.')) {
-            window.location.href = 'cancel-booking.php?id=<?php echo $booking_id; ?>';
-        }
-    }
 
     // Initialize page animations
     document.addEventListener('DOMContentLoaded', function() {

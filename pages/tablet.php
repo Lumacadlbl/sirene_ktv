@@ -35,7 +35,7 @@ function getCurrencyFromCountry($country_code = '+1') {
         '+55' => ['symbol' => 'R$', 'code' => 'BRL', 'name' => 'Brazilian Real'],
         '+52' => ['symbol' => 'Mex$', 'code' => 'MXN', 'name' => 'Mexican Peso']
     ];
-    
+   
     return $currencies[$country_code] ?? ['symbol' => '$', 'code' => 'USD', 'name' => 'US Dollar'];
 }
 
@@ -47,13 +47,13 @@ $currency_code = $currency['code'];
 // SAFE DATE FORMATTING FUNCTION
 function formatDisplayDate($date_string) {
     if (empty($date_string)) return 'No date';
-    
+   
     try {
         $date = new DateTime($date_string);
         $today = new DateTime('today');
         $tomorrow = new DateTime('tomorrow');
         $yesterday = new DateTime('yesterday');
-        
+       
         if ($date->format('Y-m-d') == $today->format('Y-m-d')) {
             return 'Today';
         } elseif ($date->format('Y-m-d') == $tomorrow->format('Y-m-d')) {
@@ -68,11 +68,11 @@ function formatDisplayDate($date_string) {
         if ($timestamp === false) {
             return 'Invalid date';
         }
-        
+       
         $today_ts = strtotime('today');
         $tomorrow_ts = strtotime('tomorrow');
         $yesterday_ts = strtotime('yesterday');
-        
+       
         if (date('Y-m-d', $timestamp) == date('Y-m-d', $today_ts)) {
             return 'Today';
         } elseif (date('Y-m-d', $timestamp) == date('Y-m-d', $tomorrow_ts)) {
@@ -153,23 +153,23 @@ $default_food_image = '../../images/food/default.jpg';
 // Handle AJAX requests
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
-    
+   
     // Close session write to prevent locking - but keep session readable
     session_write_close();
-    
+   
     // Add to cart
     if ($_POST['action'] === 'add_to_cart') {
         $food_id = intval($_POST['food_id']);
         $quantity = intval($_POST['quantity']);
         $table_id = isset($_POST['table_id']) ? intval($_POST['table_id']) : 1;
-        
+       
         // Re-open session for writing
         session_start();
-        
+       
         $food_query = $conn->query("SELECT * FROM food_beverages WHERE f_id = $food_id");
         if ($food_query && $food_query->num_rows > 0) {
             $food = $food_query->fetch_assoc();
-            
+           
             $found = false;
             foreach ($_SESSION['tablet_cart'] as &$item) {
                 if ($item['food_id'] == $food_id && $item['table_id'] == $table_id) {
@@ -178,7 +178,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     break;
                 }
             }
-            
+           
             if (!$found) {
                 $_SESSION['tablet_cart'][] = [
                     'food_id' => $food_id,
@@ -189,10 +189,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     'category' => $food['category']
                 ];
             }
-            
+           
             // Save and close session
             session_write_close();
-            
+           
             echo json_encode(['success' => true, 'cart' => $_SESSION['tablet_cart']]);
             exit;
         } else {
@@ -201,7 +201,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             exit;
         }
     }
-    
+   
     // Remove from cart
     if ($_POST['action'] === 'remove_from_cart') {
         session_start();
@@ -214,7 +214,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         echo json_encode(['success' => true, 'cart' => $_SESSION['tablet_cart']]);
         exit;
     }
-    
+   
     // Update cart
     if ($_POST['action'] === 'update_cart') {
         session_start();
@@ -227,14 +227,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         echo json_encode(['success' => true, 'cart' => $_SESSION['tablet_cart']]);
         exit;
     }
-    
+   
     // Get cart
     if ($_POST['action'] === 'get_cart') {
         // Just read session, no need to write
         echo json_encode(['success' => true, 'cart' => $_SESSION['tablet_cart']]);
         exit;
     }
-    
+   
     // Clear cart
     if ($_POST['action'] === 'clear_cart') {
         session_start();
@@ -243,33 +243,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         echo json_encode(['success' => true, 'cart' => []]);
         exit;
     }
-    
+   
     // PLACE ORDER - Save to booking_food table with table number in table_num
     if ($_POST['action'] === 'place_order') {
         // Re-open session
         session_start();
-        
+       
         $table_id = intval($_POST['table_id']);
         $items = json_decode($_POST['items'], true);
         $total_amount = floatval($_POST['total_amount']);
-        
+       
         // Start transaction
         $conn->begin_transaction();
-        
+       
         try {
             $success_count = 0;
             $order_ids = [];
-            
+           
             // Insert each item into booking_food table with table number as table_num
             foreach ($items as $item) {
                 $food_id = intval($item['food_id']);
                 $quantity = intval($item['quantity']);
                 $price = floatval($item['price']);
-                
+               
                 // Insert into booking_food table with table number as table_num (NOT b_id)
-                $insert_query = "INSERT INTO booking_food (table_num, f_id, quantity, price, served, manual_timer_minutes, order_time, is_preorder, food_payment_status) 
+                $insert_query = "INSERT INTO booking_food (table_num, f_id, quantity, price, served, manual_timer_minutes, order_time, is_preorder, food_payment_status)
                                  VALUES ($table_id, $food_id, $quantity, $price, 'pending', 15, NOW(), 0, 'pending')";
-                
+               
                 if ($conn->query($insert_query)) {
                     $success_count++;
                     $order_ids[] = $conn->insert_id;
@@ -277,27 +277,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     throw new Exception("Failed to insert food item: " . $conn->error);
                 }
             }
-            
+           
             // Commit transaction
             $conn->commit();
-            
+           
             // Clear the cart for this table from session
             $_SESSION['tablet_cart'] = array_filter($_SESSION['tablet_cart'], function($item) use ($table_id) {
                 return $item['table_id'] != $table_id;
             });
             $_SESSION['tablet_cart'] = array_values($_SESSION['tablet_cart']);
-            
+           
             session_write_close();
-            
+           
             echo json_encode([
-                'success' => true, 
+                'success' => true,
                 'message' => 'Order placed successfully!',
                 'items_added' => $success_count,
                 'order_ids' => $order_ids,
                 'cart' => $_SESSION['tablet_cart'],
                 'table_id' => $table_id
             ]);
-            
+           
         } catch (Exception $e) {
             $conn->rollback();
             session_write_close();
@@ -328,7 +328,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             --warning: #fdcb6e;
             --danger: #d63031;
             --info: #0984e3;
-            
+           
             /* Tablet-specific sizing */
             --header-height: 80px;
             --food-card-size: 180px;
@@ -350,8 +350,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         /* Larger touch targets for tablet */
-        button, 
-        .filter-tab, 
+        button,
+        .filter-tab,
         .food-item-card,
         .quantity-btn,
         .remove-item,
@@ -868,6 +868,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             gap: 10px;
         }
 
+        /* Timer display styles */
+        .timer-container {
+            background: rgba(233, 69, 96, 0.15);
+            border-radius: 16px;
+            padding: 15px;
+            margin-bottom: 15px;
+            text-align: center;
+            border: 2px solid var(--highlight);
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0% { border-color: var(--highlight); opacity: 1; }
+            50% { border-color: #ff7675; opacity: 0.8; }
+            100% { border-color: var(--highlight); opacity: 1; }
+        }
+
+        .timer-display {
+            font-size: 32px;
+            font-weight: bold;
+            color: var(--highlight);
+            margin: 10px 0;
+        }
+
+        .timer-label {
+            font-size: 14px;
+            color: rgba(255, 255, 255, 0.8);
+            margin-bottom: 5px;
+        }
+
+        .timer-progress {
+            width: 100%;
+            height: 6px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 3px;
+            margin-top: 10px;
+            overflow: hidden;
+        }
+
+        .timer-progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, var(--highlight), #ff7675);
+            width: 0%;
+            transition: width 1s linear;
+            border-radius: 3px;
+        }
+
         .cart-total {
             display: flex;
             justify-content: space-between;
@@ -1239,7 +1286,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             .ordering-interface {
                 grid-template-columns: 1fr 350px;
             }
-            
+           
             .food-grid {
                 grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
             }
@@ -1250,23 +1297,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 grid-template-columns: 1fr;
                 gap: 20px;
             }
-            
+           
             .food-browser,
             .cart-section {
                 height: auto;
                 min-height: 500px;
                 max-height: 700px;
             }
-            
+           
             .welcome-banner {
                 flex-direction: column;
                 align-items: flex-start;
             }
-            
+           
             .table-selector {
                 width: 100%;
             }
-            
+           
             .table-selector select {
                 width: 100%;
             }
@@ -1279,16 +1326,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 padding: 15px;
                 gap: 15px;
             }
-            
+           
             .header-right {
                 width: 100%;
                 justify-content: center;
             }
-            
+           
             .welcome-text h2 {
                 font-size: 24px;
             }
-            
+           
             .food-grid {
                 grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
             }
@@ -1300,7 +1347,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             .cart-section {
                 height: 70vh;
             }
-            
+           
             .food-item-image {
                 height: 120px;
             }
@@ -1317,13 +1364,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             <h3 id="modalFoodName">Add to Order</h3>
             <p id="modalFoodPrice">Select quantity</p>
         </div>
-        
+       
         <div class="quantity-control">
             <button class="quantity-control-btn" onclick="updateModalQuantity(-1)">−</button>
             <span class="quantity-display" id="modalQuantity">1</span>
             <button class="quantity-control-btn" onclick="updateModalQuantity(1)">+</button>
         </div>
-        
+       
         <div class="quantity-modal-actions">
             <button class="quantity-modal-btn cancel" onclick="closeQuantityModal()">Cancel</button>
             <button class="quantity-modal-btn confirm" id="confirmAddBtn" onclick="debouncedAddToCart()">Add to Order</button>
@@ -1339,11 +1386,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         </div>
         <h2>Order Placed!</h2>
         <p>Your order has been sent to the kitchen and will be prepared shortly.</p>
-        
+       
         <div class="delivery-details-card" id="deliveryDetails">
             <!-- Will be populated dynamically -->
         </div>
-        
+       
         <div class="order-success-actions">
             <button class="success-btn secondary" onclick="closeSuccessModal()">
                 <i class="fas fa-utensils"></i> Continue Ordering
@@ -1383,7 +1430,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <p>Order food and drinks directly from your tablet</p>
             </div>
         </div>
-        
+       
         <div class="table-selector">
             <select id="tableSelector" onchange="switchTable(this.value)">
                 <option value="1">SSVIP</option>
@@ -1418,9 +1465,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <?php endforeach; ?>
                 </div>
             </div>
-            
+           
             <div class="food-grid" id="foodGrid">
-                <?php foreach ($foods as $food): 
+                <?php foreach ($foods as $food):
                     $stock_status = 'instock';
                     $stock_level = isset($food['stock']) ? intval($food['stock']) : 999;
                     if ($stock_level <= 5 && $stock_level > 0) {
@@ -1428,14 +1475,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     } elseif ($stock_level == 0) {
                         $stock_status = 'outofstock';
                     }
-                    
+                   
                     $food_image = isset($food_images[$food['item_name']]) ? $food_images[$food['item_name']] : $default_food_image;
                 ?>
                     <div class="food-item-card" data-category="<?php echo htmlspecialchars($food['category']); ?>" data-food-id="<?php echo $food['f_id']; ?>" onclick="showQuantityModal(<?php echo $food['f_id']; ?>, '<?php echo htmlspecialchars(addslashes($food['item_name'])); ?>', <?php echo floatval($food['price']); ?>, <?php echo $stock_level; ?>)">
                         <div class="food-item-image">
-                            <?php 
+                            <?php
                             $image_path = dirname(__FILE__) . '/' . $food_image;
-                            if (file_exists($image_path)): 
+                            if (file_exists($image_path)):
                             ?>
                                 <img src="<?php echo $food_image; ?>" alt="<?php echo htmlspecialchars($food['item_name']); ?>" loading="lazy" onerror="this.onerror=null; this.parentElement.innerHTML='<i class=\"fas fa-image\" style=\"font-size: 40px; color: rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: center; height: 100%;\"></i>';">
                             <?php else: ?>
@@ -1448,7 +1495,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                             <div class="food-item-price"><?php echo $currency_symbol; ?><?php echo number_format($food['price'], 2); ?></div>
                             <div class="food-item-stock">
                                 <span class="stock-badge stock-<?php echo $stock_status; ?>"></span>
-                                <?php 
+                                <?php
                                 if ($stock_level > 10) echo 'In Stock';
                                 elseif ($stock_level > 0) echo 'Only ' . $stock_level . ' left';
                                 else echo 'Out of Stock';
@@ -1459,7 +1506,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 <?php endforeach; ?>
             </div>
         </div>
-        
+       
         <!-- Cart Section -->
         <div class="cart-section">
             <div class="cart-header">
@@ -1471,7 +1518,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     </button>
                 </div>
             </div>
-            
+           
             <div class="cart-items" id="cartItems">
                 <!-- Cart items will be loaded here dynamically -->
                 <div class="empty-cart">
@@ -1480,13 +1527,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <p style="font-size: 15px;">Tap on any item to start ordering</p>
                 </div>
             </div>
-            
+           
             <div class="cart-footer">
                 <div class="delivery-note">
                     <i class="fas fa-clock" style="color: var(--info);"></i>
                     <span>Delivery to: <strong id="cartDeliveryTable">Table 1</strong> (approx. 15-20 min)</span>
                 </div>
-                
+               
+                <!-- Timer Display (hidden by default) -->
+                <div id="timerContainer" class="timer-container" style="display: none;">
+                    <div class="timer-label">
+                        <i class="fas fa-hourglass-half"></i> Food Being Prepared
+                    </div>
+                    <div class="timer-display" id="timerDisplay">15:00</div>
+                    <div class="timer-label">estimated remaining time</div>
+                    <div class="timer-progress">
+                        <div class="timer-progress-bar" id="timerProgressBar"></div>
+                    </div>
+                </div>
+               
                 <div class="cart-total">
                     <span>Total:</span>
                     <span id="cartTotal"><?php echo $currency_symbol; ?>0.00</span>
@@ -1516,15 +1575,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     let currentTableId = 1;
     let cart = <?php echo json_encode($_SESSION['tablet_cart']); ?>;
     let currencySymbol = '<?php echo $currency_symbol; ?>';
-    
+   
+    // Timer variables
+    let orderTimer = null;
+    let timerSeconds = 0;
+    let isTimerRunning = false;
+   
     // State management
     let pendingRequests = new Map();
     let lastAddTime = 0;
     const MIN_REQUEST_INTERVAL = 800;
-    
+   
     console.log('Tablet ordering page loaded');
     console.log('Current cart:', cart);
-    
+   
     // Debounce function
     function debounce(func, wait) {
         let timeout;
@@ -1537,9 +1601,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             timeout = setTimeout(later, wait);
         };
     }
-    
+   
     const debouncedAddToCart = debounce(confirmAddToCart, 400);
-    
+   
     // Fetch with retry
     async function fetchWithRetry(url, options, maxRetries = 2) {
         for (let i = 0; i < maxRetries; i++) {
@@ -1554,18 +1618,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
         }
     }
-    
+   
     // Switch table
     function switchTable(tableId) {
         currentTableId = parseInt(tableId);
         console.log('Switched to Table:', currentTableId);
-        
+       
         document.getElementById('currentTableDisplay').innerHTML = `<i class="fas fa-chair"></i><span>Table ${tableId}</span>`;
         document.getElementById('cartDeliveryTable').textContent = `Table ${tableId}`;
-        
+       
         updateCartDisplay();
     }
-    
+   
     // Filter food items
     function filterFood(category, event) {
         if (event) {
@@ -1574,7 +1638,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             });
             event.target.classList.add('active');
         }
-        
+       
         const items = document.querySelectorAll('.food-item-card');
         items.forEach(item => {
             if (item.dataset.category === category) {
@@ -1584,28 +1648,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }
         });
     }
-    
+   
     // Show quantity modal
     function showQuantityModal(foodId, foodName, price, stock) {
         if (stock === 0) {
             showNotification('This item is out of stock.', 'error');
             return;
         }
-        
+       
         currentFoodId = foodId;
         currentFoodName = foodName;
         currentFoodPrice = price;
         currentFoodStock = stock;
         selectedQuantity = 1;
-        
+       
         document.getElementById('modalFoodName').textContent = foodName;
         document.getElementById('modalFoodPrice').textContent = currencySymbol + price.toFixed(2) + ' each';
         document.getElementById('modalQuantity').textContent = '1';
-        
+       
         const modal = document.getElementById('quantityModal');
         modal.style.display = 'flex';
     }
-    
+   
     // Update quantity in modal
     function updateModalQuantity(change) {
         let newQuantity = selectedQuantity + change;
@@ -1614,12 +1678,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             document.getElementById('modalQuantity').textContent = selectedQuantity;
         }
     }
-    
+   
     // Close quantity modal
     function closeQuantityModal() {
         document.getElementById('quantityModal').style.display = 'none';
     }
-    
+   
     // Add to cart
     function confirmAddToCart() {
         const now = Date.now();
@@ -1628,21 +1692,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             return;
         }
         lastAddTime = now;
-        
+       
         console.log('Adding to cart:', {foodId: currentFoodId, quantity: selectedQuantity, tableId: currentTableId});
-        
+       
         const requestKey = `${currentFoodId}_${currentTableId}`;
         if (pendingRequests.has(requestKey)) {
             showNotification('Already adding...', 'info');
             return;
         }
         pendingRequests.set(requestKey, true);
-        
+       
         const confirmBtn = document.querySelector('.quantity-modal-btn.confirm');
         const originalBtnText = confirmBtn.innerHTML;
         confirmBtn.innerHTML = '<span class="loading-spinner"></span> Adding...';
         confirmBtn.disabled = true;
-        
+       
         fetchWithRetry(window.location.href, {
             method: 'POST',
             headers: {
@@ -1671,11 +1735,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             confirmBtn.disabled = false;
         });
     }
-    
+   
     // Update cart item
     function updateCartItem(index, newQuantity) {
         if (newQuantity < 1) return;
-        
+       
         fetchWithRetry(window.location.href, {
             method: 'POST',
             headers: {
@@ -1694,7 +1758,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             showNotification('Update failed', 'error');
         });
     }
-    
+   
     // Remove from cart
     function removeFromCart(index) {
         fetchWithRetry(window.location.href, {
@@ -1716,11 +1780,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             showNotification('Remove failed', 'error');
         });
     }
-    
+   
     // Clear cart
     function clearCart() {
         if (!confirm('Clear all items from your order?')) return;
-        
+       
         fetchWithRetry(window.location.href, {
             method: 'POST',
             headers: {
@@ -1740,7 +1804,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             showNotification('Clear failed', 'error');
         });
     }
-    
+   
     // Update cart display
     function updateCartDisplay() {
         const cartItems = document.getElementById('cartItems');
@@ -1748,12 +1812,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         const cartTotal = document.getElementById('cartTotal');
         const checkoutBtn = document.getElementById('checkoutBtn');
         const clearCartBtn = document.getElementById('clearCartBtn');
-        
+       
         if (!cartItems) return;
-        
+       
         // Filter cart items for current table
         const tableCartItems = cart.filter(item => item.table_id == currentTableId);
-        
+       
         if (tableCartItems.length === 0) {
             cartItems.innerHTML = `
                 <div class="empty-cart">
@@ -1764,27 +1828,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             `;
             if (cartItemCount) cartItemCount.textContent = '0';
             if (cartTotal) cartTotal.textContent = currencySymbol + '0.00';
-            if (checkoutBtn) checkoutBtn.disabled = true;
+           
+            // Only enable checkout if timer is NOT running
+            if (checkoutBtn && !isTimerRunning) {
+                checkoutBtn.disabled = true;
+            } else if (checkoutBtn && isTimerRunning) {
+                checkoutBtn.innerHTML = '<span class="loading-spinner"></span> Preparing Food...';
+                checkoutBtn.disabled = true;
+            }
+           
             if (clearCartBtn) clearCartBtn.style.display = 'none';
             return;
         }
-        
+       
         if (clearCartBtn) clearCartBtn.style.display = 'inline-block';
-        
+       
         let html = '';
         let total = 0;
-        
+       
         tableCartItems.forEach((item, idx) => {
-            const originalIndex = cart.findIndex(cartItem => 
-                cartItem.food_id == item.food_id && 
+            const originalIndex = cart.findIndex(cartItem =>
+                cartItem.food_id == item.food_id &&
                 cartItem.table_id == item.table_id
             );
-            
+           
             if (originalIndex === -1) return;
-            
+           
             const itemTotal = parseFloat(item.price) * parseInt(item.quantity);
             total += itemTotal;
-            
+           
             html += `
                 <div class="cart-item">
                     <div class="cart-item-details">
@@ -1793,47 +1865,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         <div style="font-size: 14px; color: #aaa;">Subtotal: ${currencySymbol}${itemTotal.toFixed(2)}</div>
                     </div>
                     <div class="cart-item-quantity">
-                        <button class="quantity-btn" onclick="updateCartItem(${originalIndex}, ${parseInt(item.quantity) - 1})" ${item.quantity <= 1 ? 'disabled' : ''}>−</button>
+                        <button class="quantity-btn" onclick="updateCartItem(${originalIndex}, ${parseInt(item.quantity) - 1})" ${item.quantity <= 1 || isTimerRunning ? 'disabled' : ''}>−</button>
                         <span>${item.quantity}</span>
-                        <button class="quantity-btn" onclick="updateCartItem(${originalIndex}, ${parseInt(item.quantity) + 1})">+</button>
+                        <button class="quantity-btn" onclick="updateCartItem(${originalIndex}, ${parseInt(item.quantity) + 1})" ${isTimerRunning ? 'disabled' : ''}>+</button>
                     </div>
-                    <div class="remove-item" onclick="removeFromCart(${originalIndex})">
+                    <div class="remove-item" onclick="${isTimerRunning ? '' : `removeFromCart(${originalIndex})`}" style="${isTimerRunning ? 'opacity: 0.5; pointer-events: none;' : ''}">
                         <i class="fas fa-trash"></i>
                     </div>
                 </div>
             `;
         });
-        
+       
         cartItems.innerHTML = html;
-        
+       
         if (cartItemCount) cartItemCount.textContent = tableCartItems.length;
         if (cartTotal) cartTotal.textContent = currencySymbol + total.toFixed(2);
-        if (checkoutBtn) checkoutBtn.disabled = false;
+       
+        // Checkout button state - disabled if timer is running
+        if (checkoutBtn) {
+            if (isTimerRunning) {
+                checkoutBtn.innerHTML = '<span class="loading-spinner"></span> Preparing Food...';
+                checkoutBtn.disabled = true;
+            } else {
+                checkoutBtn.innerHTML = '<i class="fas fa-check-circle"></i> Place Order';
+                checkoutBtn.disabled = false;
+            }
+        }
     }
-    
+   
     // Place order - Saves to database using table_num column
     function placeOrder() {
         const tableCartItems = cart.filter(item => item.table_id == currentTableId);
-        
+       
         if (tableCartItems.length === 0) {
             showNotification('Your cart is empty', 'error');
             return;
         }
-        
+       
         // Calculate total
         let total = 0;
         tableCartItems.forEach(item => {
             total += parseFloat(item.price) * parseInt(item.quantity);
         });
-        
+       
         // Show loading state
         const checkoutBtn = document.getElementById('checkoutBtn');
         const originalText = checkoutBtn.innerHTML;
         checkoutBtn.innerHTML = '<span class="loading-spinner"></span> Placing Order...';
         checkoutBtn.disabled = true;
-        
+       
         console.log('Placing order for Table', currentTableId, 'with items:', tableCartItems);
-        
+       
         // Send order to server
         fetchWithRetry(window.location.href, {
             method: 'POST',
@@ -1844,22 +1926,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         })
         .then(data => {
             console.log('Place order response:', data);
-            
+           
             if (data.success) {
                 // Update cart with returned data
                 if (data.cart) {
                     cart = data.cart;
                 }
-                
+               
                 // Update display
                 updateCartDisplay();
-                
+               
                 // Show success notification
                 showNotification('✓ Order placed successfully! Kitchen has been notified.', 'success');
-                
+               
                 // Populate and show success modal with details
                 showOrderSuccessModal(data);
-                
+               
+                // Start the automatic timer (15-20 minutes)
+                startAutoTimer();
+               
             } else {
                 showNotification('❌ Error placing order: ' + data.message, 'error');
                 checkoutBtn.innerHTML = originalText;
@@ -1873,18 +1958,107 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             checkoutBtn.disabled = false;
         });
     }
-    
+   
+    // Start automatic timer between 15-20 minutes
+    function startAutoTimer() {
+        // Random time between 15-20 minutes (converted to seconds)
+        const minMinutes = 15;
+        const maxMinutes = 20;
+        const randomMinutes = Math.floor(Math.random() * (maxMinutes - minMinutes + 1)) + minMinutes;
+        timerSeconds = randomMinutes * 60;
+       
+        // Show timer container
+        const timerContainer = document.getElementById('timerContainer');
+        timerContainer.style.display = 'block';
+       
+        // Disable checkout button and keep it in loading state
+        const checkoutBtn = document.getElementById('checkoutBtn');
+        checkoutBtn.innerHTML = '<span class="loading-spinner"></span> Preparing Food...';
+        checkoutBtn.disabled = true;
+       
+        // Start countdown
+        isTimerRunning = true;
+        updateTimerDisplay();
+       
+        // Start progress bar animation
+        const progressBar = document.getElementById('timerProgressBar');
+        progressBar.style.transition = `width ${timerSeconds}s linear`;
+        setTimeout(() => {
+            if (isTimerRunning) {
+                progressBar.style.width = '100%';
+            }
+        }, 100);
+       
+        // Set interval to update timer every second
+        if (orderTimer) clearInterval(orderTimer);
+        orderTimer = setInterval(function() {
+            if (timerSeconds > 0 && isTimerRunning) {
+                timerSeconds--;
+                updateTimerDisplay();
+            } else if (timerSeconds <= 0 && isTimerRunning) {
+                // Timer finished
+                stopTimerAndReset();
+            }
+        }, 1000);
+    }
+   
+    // Update timer display (mm:ss format)
+    function updateTimerDisplay() {
+        const minutes = Math.floor(timerSeconds / 60);
+        const seconds = timerSeconds % 60;
+        const displayElement = document.getElementById('timerDisplay');
+        if (displayElement) {
+            displayElement.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        }
+    }
+   
+    // Stop timer and reset UI
+    function stopTimerAndReset() {
+        if (orderTimer) {
+            clearInterval(orderTimer);
+            orderTimer = null;
+        }
+       
+        isTimerRunning = false;
+       
+        // Hide timer container
+        const timerContainer = document.getElementById('timerContainer');
+        if (timerContainer) {
+            timerContainer.style.display = 'none';
+        }
+       
+        // Reset progress bar
+        const progressBar = document.getElementById('timerProgressBar');
+        if (progressBar) {
+            progressBar.style.width = '0%';
+            progressBar.style.transition = '';
+        }
+       
+        // Re-enable checkout button
+        const checkoutBtn = document.getElementById('checkoutBtn');
+        const cartItems = cart.filter(item => item.table_id == currentTableId);
+       
+        if (cartItems.length > 0) {
+            checkoutBtn.innerHTML = '<i class="fas fa-check-circle"></i> Place Order';
+            checkoutBtn.disabled = false;
+            showNotification('✓ Your food is ready! You can place a new order now.', 'success');
+        } else {
+            checkoutBtn.innerHTML = '<i class="fas fa-check-circle"></i> Place Order';
+            checkoutBtn.disabled = true;
+        }
+    }
+   
     // Show order success modal
     function showOrderSuccessModal(orderData) {
         const modal = document.getElementById('orderSuccessModal');
         const deliveryDetails = document.getElementById('deliveryDetails');
-        
+       
         // Get current date and time
         const now = new Date();
         const deliveryTime = new Date(now.getTime() + 20 * 60000); // Add 20 minutes
-        
+       
         const formattedTime = deliveryTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        
+       
         deliveryDetails.innerHTML = `
             <div class="delivery-detail-item">
                 <div class="detail-icon"><i class="fas fa-chair"></i></div>
@@ -1915,37 +2089,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 </div>
             </div>
         `;
-        
+       
         modal.style.display = 'flex';
     }
-    
+   
     // Close success modal
     function closeSuccessModal() {
         document.getElementById('orderSuccessModal').style.display = 'none';
     }
-    
-    // Start new order
+   
+    // Start new order (reset timer)
     function startNewOrder() {
+        // Stop timer if running
+        if (orderTimer) {
+            clearInterval(orderTimer);
+            orderTimer = null;
+        }
+        isTimerRunning = false;
+       
+        // Hide timer container
+        const timerContainer = document.getElementById('timerContainer');
+        if (timerContainer) {
+            timerContainer.style.display = 'none';
+        }
+       
+        // Reset progress bar
+        const progressBar = document.getElementById('timerProgressBar');
+        if (progressBar) {
+            progressBar.style.width = '0%';
+        }
+       
         closeSuccessModal();
         clearCart();
     }
-    
+   
     // Show notification
     function showNotification(message, type) {
         const existingNotification = document.querySelector('.notification');
         if (existingNotification) {
             existingNotification.remove();
         }
-        
+       
         const notification = document.createElement('div');
         notification.className = 'notification ' + type;
         notification.innerHTML = `
             <i class="fas ${type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle'}"></i>
             ${message}
         `;
-        
+       
         document.body.appendChild(notification);
-        
+       
         setTimeout(() => {
             notification.style.animation = 'slideOut 0.3s';
             setTimeout(() => {
@@ -1955,20 +2148,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             }, 300);
         }, 3000);
     }
-    
+   
     // Initialize on page load
     document.addEventListener('DOMContentLoaded', function() {
         console.log('Tablet page initialized');
-        
+       
         // Set initial filter to first category
         const firstFilterTab = document.querySelector('.filter-tab');
         if (firstFilterTab) {
             const firstCategory = firstFilterTab.textContent;
             filterFood(firstCategory, { target: firstFilterTab });
         }
-        
+       
         updateCartDisplay();
-        
+       
         // Modal click outside to close
         const modal = document.getElementById('quantityModal');
         modal.addEventListener('click', function(e) {
@@ -1976,7 +2169,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 closeQuantityModal();
             }
         });
-        
+       
         // Escape key to close modals
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
@@ -1984,7 +2177,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 closeSuccessModal();
             }
         });
-        
+       
         // Animate food items
         const items = document.querySelectorAll('.food-item-card');
         items.forEach((item, index) => {
